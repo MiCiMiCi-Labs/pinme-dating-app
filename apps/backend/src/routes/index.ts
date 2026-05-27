@@ -1,0 +1,26 @@
+import { Router } from 'express';
+import authRouter from './auth';
+import usersRouter from './users';
+import profilesRouter from './profiles';
+import photosRouter from './photos';
+import swipesRouter from './swipes';
+import matchesRouter from './matches';
+import messagesRouter from './messages';
+import reportsRouter from './reports';
+import blocksRouter from './blocks';
+import preferencesRouter from './preferences';
+import privacyRouter from './privacy';
+
+export const router = Router();
+
+router.use('/auth', authRouter);
+router.use('/users', usersRouter);
+router.use('/profiles', profilesRouter);
+router.use('/photos', photosRouter);
+router.use('/swipes', swipesRouter);
+router.use('/matches', matchesRouter);
+router.use('/messages', messagesRouter);
+router.use('/reports', reportsRouter);
+router.use('/blocks', blocksRouter);
+router.use('/preferences', preferencesRouter);
+router.use('/privacy', privacyRouter);

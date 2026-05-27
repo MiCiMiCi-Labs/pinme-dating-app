@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "PinMe",
+    "slug": "pinme-dating-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.pinme.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "PinMe needs your location to show nearby people.",
+        "NSPhotoLibraryUsageDescription": "PinMe needs access to your photos to update your profile.",
+        "NSCameraUsageDescription": "PinMe needs camera access to take profile photos."
+      }
+    },
+    "android": {
+      "package": "com.pinme.app",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.CAMERA"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow PinMe to use your location."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow PinMe to access your photos.",
+          "cameraPermission": "Allow PinMe to take photos."
+        }
+      ],
+      "expo-font"
+    ],
+    "scheme": "pinme",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

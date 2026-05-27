@@ -1,3 +1,14 @@
+# Expo
+.expo/
+expo-env.d.ts
+
+# React Native
+android/
+ios/
+
+# Prisma generated
+apps/backend/src/generated/
+
 # Logs
 logs
 *.log
