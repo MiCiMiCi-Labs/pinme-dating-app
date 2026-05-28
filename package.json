@@ -15,5 +15,8 @@
   },
   "devDependencies": {
     "prisma": "^5.22.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2"
   }
 }

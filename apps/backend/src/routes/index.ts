@@ -10,6 +10,7 @@ import reportsRouter from './reports';
 import blocksRouter from './blocks';
 import preferencesRouter from './preferences';
 import privacyRouter from './privacy';
+import testRouter from './test';
 
 export const router = Router();
 
@@ -24,3 +25,4 @@ router.use('/reports', reportsRouter);
 router.use('/blocks', blocksRouter);
 router.use('/preferences', preferencesRouter);
 router.use('/privacy', privacyRouter);
+router.use('/test', testRouter);
