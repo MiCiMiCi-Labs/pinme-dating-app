@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import ws from 'ws';
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];
@@ -23,6 +24,8 @@ export const supabaseServer: SupabaseClient = createClient(
       persistSession: false,
       detectSessionInUrl: false,
     },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    realtime: { transport: ws as any },
   }
 );
 

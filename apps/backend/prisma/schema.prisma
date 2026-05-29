@@ -8,7 +8,173 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ─── Enums ───────────────────────────────────────────────────────────────────
+model User {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  name            String
+  gender          Gender
+  birthday        DateTime         @db.Date
+  bio             String?
+  city            String?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  supabaseAuthId  String           @unique
+  blocksReceived  Block[]          @relation("BlockedBlocks")
+  blocksGiven     Block[]          @relation("BlockerBlocks")
+  location        Location?
+  matchesAsUser1  Match[]          @relation("User1Matches")
+  matchesAsUser2  Match[]          @relation("User2Matches")
+  messagesSent    Message[]
+  photos          Photo[]
+  preferences     Preference?
+  privacySettings PrivacySettings?
+  profile         Profile?
+  reportsReceived Report[]         @relation("ReportedReports")
+  reportsGiven    Report[]         @relation("ReporterReports")
+  swipesGiven     Swipe[]          @relation("SwiperSwipes")
+  swipesReceived  Swipe[]          @relation("TargetSwipes")
+
+  @@map("users")
+}
+
+model Profile {
+  id               String            @id @default(uuid())
+  userId           String            @unique @map("user_id")
+  height           Int?
+  education        String?
+  jobTitle         String?           @map("job_title")
+  company          String?
+  relationshipGoal RelationshipGoal? @map("relationship_goal")
+  drinking         String?
+  smoking          String?
+  mbti             String?
+  constellation    String?
+  prompt1          String?           @map("prompt_1")
+  prompt2          String?           @map("prompt_2")
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model Photo {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  url        String
+  orderIndex Int      @default(0) @map("order_index")
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  createdAt  DateTime @default(now()) @map("created_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("photos")
+}
+
+model Preference {
+  id              String  @id @default(uuid())
+  userId          String  @unique @map("user_id")
+  preferredGender Gender? @map("preferred_gender")
+  minAge          Int?    @map("min_age")
+  maxAge          Int?    @map("max_age")
+  maxDistanceKm   Int?    @map("max_distance_km")
+  minHeight       Int?    @map("min_height")
+  maxHeight       Int?    @map("max_height")
+  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("preferences")
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  latitude  Float
+  longitude Float
+  city      String?
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("locations")
+}
+
+model Swipe {
+  id        String      @id @default(uuid())
+  swiperId  String      @map("swiper_id")
+  targetId  String      @map("target_id")
+  action    SwipeAction
+  createdAt DateTime    @default(now()) @map("created_at")
+  swiper    User        @relation("SwiperSwipes", fields: [swiperId], references: [id], onDelete: Cascade)
+  target    User        @relation("TargetSwipes", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([swiperId, targetId])
+  @@index([targetId])
+  @@map("swipes")
+}
+
+model Match {
+  id          String    @id @default(uuid())
+  user1Id     String    @map("user1_id")
+  user2Id     String    @map("user2_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  unmatchedAt DateTime? @map("unmatched_at")
+  user1       User      @relation("User1Matches", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2       User      @relation("User2Matches", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages    Message[]
+
+  @@unique([user1Id, user2Id])
+  @@map("matches")
+}
+
+model Message {
+  id          String      @id @default(uuid())
+  matchId     String      @map("match_id")
+  senderId    String      @map("sender_id")
+  content     String
+  messageType MessageType @default(TEXT) @map("message_type")
+  isRead      Boolean     @default(false) @map("is_read")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  match       Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  sender      User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, createdAt])
+  @@map("messages")
+}
+
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String   @map("blocker_id")
+  blockedId String   @map("blocked_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  blocked   User     @relation("BlockedBlocks", fields: [blockedId], references: [id], onDelete: Cascade)
+  blocker   User     @relation("BlockerBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@map("blocks")
+}
+
+model Report {
+  id          String       @id @default(uuid())
+  reporterId  String       @map("reporter_id")
+  reportedId  String       @map("reported_id")
+  reason      String
+  description String?
+  status      ReportStatus @default(PENDING)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  reported    User         @relation("ReportedReports", fields: [reportedId], references: [id], onDelete: Cascade)
+  reporter    User         @relation("ReporterReports", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+model PrivacySettings {
+  id               String  @id @default(uuid())
+  userId           String  @unique @map("user_id")
+  showDistance     Boolean @default(true) @map("show_distance")
+  showAge          Boolean @default(true) @map("show_age")
+  showOnlineStatus Boolean @default(true) @map("show_online_status")
+  discoverable     Boolean @default(true)
+  locationVisible  Boolean @default(true) @map("location_visible")
+  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("privacy_settings")
+}
 
 enum Gender {
   MALE
@@ -41,187 +207,4 @@ enum ReportStatus {
   REVIEWED
   RESOLVED
   DISMISSED
-}
-
-// ─── Models ──────────────────────────────────────────────────────────────────
-
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String
-  gender    Gender
-  birthday  DateTime @db.Date
-  bio       String?
-  city      String?
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  supabaseAuthId String @unique
-
-  profile         Profile?
-  photos          Photo[]
-  preferences     Preference?
-  location        Location?
-  privacySettings PrivacySettings?
-
-  swipesGiven     Swipe[]  @relation("SwiperSwipes")
-  swipesReceived  Swipe[]  @relation("TargetSwipes")
-  matchesAsUser1  Match[]  @relation("User1Matches")
-  matchesAsUser2  Match[]  @relation("User2Matches")
-  messagesSent    Message[]
-
-  blocksGiven     Block[]  @relation("BlockerBlocks")
-  blocksReceived  Block[]  @relation("BlockedBlocks")
-  reportsGiven    Report[] @relation("ReporterReports")
-  reportsReceived Report[] @relation("ReportedReports")
-
-  @@map("users")
-}
-
-model Profile {
-  id               String           @id @default(uuid())
-  userId           String           @unique @map("user_id")
-  height           Int?
-  education        String?
-  jobTitle         String?          @map("job_title")
-  company          String?
-  relationshipGoal RelationshipGoal? @map("relationship_goal")
-  drinking         String?
-  smoking          String?
-  mbti             String?
-  constellation    String?
-  prompt1          String?          @map("prompt_1")
-  prompt2          String?          @map("prompt_2")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("profiles")
-}
-
-model Photo {
-  id         String   @id @default(uuid())
-  userId     String   @map("user_id")
-  url        String
-  orderIndex Int      @default(0) @map("order_index")
-  isPrimary  Boolean  @default(false) @map("is_primary")
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("photos")
-}
-
-model Preference {
-  id              String  @id @default(uuid())
-  userId          String  @unique @map("user_id")
-  preferredGender Gender? @map("preferred_gender")
-  minAge          Int?    @map("min_age")
-  maxAge          Int?    @map("max_age")
-  maxDistanceKm   Int?    @map("max_distance_km")
-  minHeight       Int?    @map("min_height")
-  maxHeight       Int?    @map("max_height")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("preferences")
-}
-
-model Location {
-  id        String   @id @default(uuid())
-  userId    String   @unique @map("user_id")
-  latitude  Float
-  longitude Float
-  city      String?
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("locations")
-}
-
-model Swipe {
-  id        String      @id @default(uuid())
-  swiperId  String      @map("swiper_id")
-  targetId  String      @map("target_id")
-  action    SwipeAction
-  createdAt DateTime    @default(now()) @map("created_at")
-
-  swiper User @relation("SwiperSwipes", fields: [swiperId], references: [id], onDelete: Cascade)
-  target User @relation("TargetSwipes", fields: [targetId], references: [id], onDelete: Cascade)
-
-  @@unique([swiperId, targetId])
-  @@index([targetId])
-  @@map("swipes")
-}
-
-model Match {
-  id          String    @id @default(uuid())
-  user1Id     String    @map("user1_id")
-  user2Id     String    @map("user2_id")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  unmatchedAt DateTime? @map("unmatched_at")
-
-  user1    User      @relation("User1Matches", fields: [user1Id], references: [id], onDelete: Cascade)
-  user2    User      @relation("User2Matches", fields: [user2Id], references: [id], onDelete: Cascade)
-  messages Message[]
-
-  @@unique([user1Id, user2Id])
-  @@map("matches")
-}
-
-model Message {
-  id          String      @id @default(uuid())
-  matchId     String      @map("match_id")
-  senderId    String      @map("sender_id")
-  content     String
-  messageType MessageType @default(TEXT) @map("message_type")
-  isRead      Boolean     @default(false) @map("is_read")
-  createdAt   DateTime    @default(now()) @map("created_at")
-
-  match  Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
-  sender User  @relation(fields: [senderId], references: [id], onDelete: Cascade)
-
-  @@index([matchId, createdAt])
-  @@map("messages")
-}
-
-model Block {
-  id        String   @id @default(uuid())
-  blockerId String   @map("blocker_id")
-  blockedId String   @map("blocked_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  blocker User @relation("BlockerBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
-  blocked User @relation("BlockedBlocks", fields: [blockedId], references: [id], onDelete: Cascade)
-
-  @@unique([blockerId, blockedId])
-  @@map("blocks")
-}
-
-model Report {
-  id          String       @id @default(uuid())
-  reporterId  String       @map("reporter_id")
-  reportedId  String       @map("reported_id")
-  reason      String
-  description String?
-  status      ReportStatus @default(PENDING)
-  createdAt   DateTime     @default(now()) @map("created_at")
-
-  reporter User @relation("ReporterReports", fields: [reporterId], references: [id], onDelete: Cascade)
-  reported User @relation("ReportedReports", fields: [reportedId], references: [id], onDelete: Cascade)
-
-  @@map("reports")
-}
-
-model PrivacySettings {
-  id               String  @id @default(uuid())
-  userId           String  @unique @map("user_id")
-  showDistance     Boolean @default(true) @map("show_distance")
-  showAge          Boolean @default(true) @map("show_age")
-  showOnlineStatus Boolean @default(true) @map("show_online_status")
-  discoverable     Boolean @default(true)
-  locationVisible  Boolean @default(true) @map("location_visible")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("privacy_settings")
 }
