@@ -54,6 +54,8 @@ export async function requireAuth(
   }
 }
 
+export const authMiddleware = requireAuth;
+
 export async function optionalAuth(
   req: Request,
   _res: Response,
