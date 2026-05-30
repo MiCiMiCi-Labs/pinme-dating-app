@@ -1,9 +1,15 @@
 import { Router } from 'express';
-
-// GET    /api/v1/blocks          (list blocked users)
-// POST   /api/v1/blocks          { blockedId }
-// DELETE /api/v1/blocks/:blockedId
+import { requireAuth } from '../middleware/auth';
+import { blockUser, unblockUser } from '../controllers/blocks';
 
 const router = Router();
+
+router.use(requireAuth);
+
+// POST   /api/v1/blocks               { blockedId }
+router.post('/', blockUser);
+
+// DELETE /api/v1/blocks/:blockedUserId
+router.delete('/:blockedUserId', unblockUser);
 
 export default router;
