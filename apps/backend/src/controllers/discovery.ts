@@ -34,6 +34,14 @@ function calculateDistanceKm(
   return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function fuzzyDistance(km: number | null): string | null {
+  if (km === null) return null;
+  if (km < 5) return '< 5km';
+  if (km < 20) return '5–20km';
+  if (km < 50) return '20–50km';
+  return '> 50km';
+}
+
 function parseLimit(value: unknown): number {
   const limit = Number(value ?? 20);
 
@@ -140,11 +148,10 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         gender: candidate.gender,
         bio: candidate.bio,
         city: candidate.city,
-        age: candidate.privacySettings?.showAge === false ? null : age,
-        distanceKm:
-          candidate.privacySettings?.showDistance === false
-            ? null
-            : distanceKm,
+        age,
+        distanceKm: candidate.privacySettings?.showDistance
+          ? fuzzyDistance(distanceKm)
+          : null,
         profile: candidate.profile,
         photos: candidate.photos,
       }));

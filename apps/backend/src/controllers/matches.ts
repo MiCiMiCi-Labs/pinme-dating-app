@@ -9,6 +9,16 @@ async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   return user?.id ?? null;
 }
 
+function calculateAge(birthday: Date): number {
+  const today = new Date();
+  let age = today.getFullYear() - birthday.getFullYear();
+  const monthDiff = today.getMonth() - birthday.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthday.getDate())) {
+    age -= 1;
+  }
+  return age;
+}
+
 const otherUserInclude = {
   select: {
     id: true,
@@ -45,11 +55,12 @@ export async function getMatches(req: Request, res: Response) {
     });
 
     const result = matches.map((match) => {
-      const otherUser = match.user1Id === dbUserId ? match.user2 : match.user1;
+      const other = match.user1Id === dbUserId ? match.user2 : match.user1;
+      const { birthday, ...otherFields } = other;
       return {
         matchId: match.id,
         createdAt: match.createdAt,
-        user: otherUser,
+        user: { ...otherFields, age: calculateAge(birthday) },
       };
     });
 
