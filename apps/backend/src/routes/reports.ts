@@ -1,7 +1,12 @@
 import { Router } from 'express';
-
-// POST /api/v1/reports   { reportedId, reason, description }
+import { requireAuth } from '../middleware/auth';
+import { createReport } from '../controllers/reports';
 
 const router = Router();
+
+router.use(requireAuth);
+
+// POST /api/v1/reports   { reportedId, reason, description? }
+router.post('/', createReport);
 
 export default router;
