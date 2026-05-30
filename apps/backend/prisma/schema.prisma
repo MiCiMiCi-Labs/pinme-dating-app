@@ -166,11 +166,9 @@ model Report {
 model PrivacySettings {
   id               String  @id @default(uuid())
   userId           String  @unique @map("user_id")
-  showDistance     Boolean @default(true) @map("show_distance")
-  showAge          Boolean @default(true) @map("show_age")
-  showOnlineStatus Boolean @default(true) @map("show_online_status")
   discoverable     Boolean @default(true)
-  locationVisible  Boolean @default(true) @map("location_visible")
+  showDistance     Boolean @default(false) @map("show_distance")
+  showOnlineStatus Boolean @default(false) @map("show_online_status")
   user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("privacy_settings")
