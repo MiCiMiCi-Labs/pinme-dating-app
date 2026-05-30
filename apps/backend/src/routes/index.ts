@@ -11,6 +11,7 @@ import blocksRouter from './blocks';
 import preferencesRouter from './preferences';
 import privacyRouter from './privacy';
 import testRouter from './test';
+import discoveryRouter from './discovery';
 
 export const router = Router();
 
@@ -26,3 +27,4 @@ router.use('/blocks', blocksRouter);
 router.use('/preferences', preferencesRouter);
 router.use('/privacy', privacyRouter);
 router.use('/test', testRouter);
+router.use('/discovery', discoveryRouter);
