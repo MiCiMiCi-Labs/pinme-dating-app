@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import authRoutes from './routes/auth';
 import profileRoutes from './routes/profiles';
 import preferencesRoutes from './routes/preferences';
+import discoveryRoutes from './routes/discovery';
 import { router } from './routes';
 import { errorHandler } from './middleware/errorHandler';
 
@@ -24,6 +25,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/preferences', preferencesRoutes);
+app.use('/api/discovery', discoveryRoutes);
 app.use('/api/v1', router);
 
 app.use(errorHandler);
