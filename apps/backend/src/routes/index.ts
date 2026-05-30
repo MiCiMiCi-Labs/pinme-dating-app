@@ -10,11 +10,13 @@ import reportsRouter from './reports';
 import blocksRouter from './blocks';
 import preferencesRouter from './preferences';
 import privacyRouter from './privacy';
+import locationRouter from './location';
 import testRouter from './test';
 
 export const router = Router();
 
 router.use('/auth', authRouter);
+router.use('/location', locationRouter);
 router.use('/users', usersRouter);
 router.use('/profiles', profilesRouter);
 router.use('/photos', photosRouter);
