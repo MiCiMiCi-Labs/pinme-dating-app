@@ -2,10 +2,6 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/design/system';
 
-const hiddenTabOptions = {
-  href: null,
-};
-
 function TabIcon({
   name,
   focused,
@@ -44,6 +40,14 @@ export default function MainLayout() {
         }}
       />
       <Tabs.Screen
+        name="matches"
+        options={{
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name={focused ? 'heart' : 'heart-outline'} focused={focused} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="chats"
         options={{
           tabBarIcon: ({ color, focused }) => (
@@ -63,9 +67,6 @@ export default function MainLayout() {
           ),
         }}
       />
-      <Tabs.Screen name="profile/detail" options={hiddenTabOptions} />
-      <Tabs.Screen name="profile/photos" options={hiddenTabOptions} />
-      <Tabs.Screen name="chats/[matchId]" options={hiddenTabOptions} />
     </Tabs>
   );
 }

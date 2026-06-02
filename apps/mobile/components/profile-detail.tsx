@@ -16,7 +16,7 @@ export function ProfileDetailContent() {
         <Image source={{ uri: photos.portrait }} style={styles.heroImage} contentFit="cover" />
         <IconButton
           icon="chevron-back"
-          onPress={() => router.replace('/(main)/discover')}
+          onPress={() => router.back()}
           style={styles.back}
         />
         <LinearGradient colors={['transparent', '#FFFFFF']} style={styles.fade} />

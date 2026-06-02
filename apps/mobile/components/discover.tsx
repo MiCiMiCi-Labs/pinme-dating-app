@@ -12,13 +12,13 @@ export function DiscoverCard({
   height,
   mode,
 }: {
-  person: { name: string; age: number; role: string; distance: string; image: string };
+  person: { id: string; name: string; age: number; role: string; distance: string; image: string };
   height: number;
   mode: SwipeMode;
 }) {
   return (
     <Pressable
-      onPress={() => router.push('/(main)/profile/detail')}
+      onPress={() => router.push({ pathname: '/(main)/discover/[userId]', params: { userId: person.id } })}
       style={[styles.card, { height }, mode === 'like' && styles.likeCard, mode === 'nope' && styles.nopeCard]}
     >
       <Image source={{ uri: person.image }} style={styles.cardImage} contentFit="cover" />
