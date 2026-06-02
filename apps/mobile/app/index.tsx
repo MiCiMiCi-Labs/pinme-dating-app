@@ -60,6 +60,11 @@ export default function OnboardingScreen() {
             <Text style={styles.signInLink}>Sign In</Text>
           </Pressable>
         </View>
+        {__DEV__ && (
+          <Pressable onPress={() => router.replace('/(main)/discover')}>
+            <Text style={styles.devSkip}>[ Dev: skip to app ]</Text>
+          </Pressable>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -140,5 +145,10 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 14,
     fontWeight: '800',
+  },
+  devSkip: {
+    color: colors.muted,
+    fontSize: 12,
+    textAlign: 'center',
   },
 });
