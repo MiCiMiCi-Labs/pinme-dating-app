@@ -116,7 +116,7 @@ export default function RegisterScreen() {
         birthday,
       });
 
-      router.replace('/(main)/discover');
+      router.replace('/(auth)/complete-profile');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create account');
     } finally {
