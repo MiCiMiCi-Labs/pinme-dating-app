@@ -1,96 +1,149 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, SafeAreaView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { colors, IconButton, PrimaryButton } from '@/design/system';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { syncAuthUser } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { colors, LogoMark, PrimaryButton } from '@/design/system';
+
+function getLoginErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+
+    if (message.includes('email not confirmed')) {
+      return 'Please confirm your email before logging in.';
+    }
+
+    return error.message;
+  }
+
+  return 'Failed to log in';
+}
 
 export default function LoginScreen() {
-  const [step, setStep] = useState<'number' | 'code'>('number');
-  const [code, setCode] = useState(['7', '2', '', '']);
   const { height } = useWindowDimensions();
-  const numberTop = Math.min(height * 0.2, 168);
+  const [email, setEmail] = useState('123@gmail.com');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const topSpacing = keyboardVisible ? 20 : Math.min(height * 0.08, 68);
 
-  if (step === 'code') {
-    return (
-      <SafeAreaView style={styles.screen}>
-        <View style={styles.topBar}>
-          <IconButton icon="chevron-back" onPress={() => setStep('number')} />
-        </View>
-        <View style={styles.codeHeader}>
-          <Text style={styles.timer}>00:42</Text>
-          <Text style={styles.codeCopy}>Type the verification code{'\n'}we’ve sent you</Text>
-        </View>
-        <View style={styles.codeBoxes}>
-          {code.map((value, index) => (
-            <View key={index} style={[styles.codeBox, value ? styles.codeBoxFilled : null]}>
-              <Text style={[styles.codeText, value ? styles.codeTextFilled : null]}>
-                {value || '0'}
-              </Text>
-            </View>
-          ))}
-        </View>
-        <View style={styles.keypad}>
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'backspace-outline'].map(
-            (item, index) => (
-              <Pressable
-                key={`${item}-${index}`}
-                style={styles.key}
-                onPress={() => {
-                  if (!item) return;
-                  if (item === 'backspace-outline') {
-                    const next = [...code];
-                    const lastFilled = next.map(Boolean).lastIndexOf(true);
-                    if (lastFilled >= 0) next[lastFilled] = '';
-                    setCode(next);
-                    return;
-                  }
-                  const next = [...code];
-                  const empty = next.findIndex((digit) => !digit);
-                  if (empty >= 0) next[empty] = item;
-                  setCode(next);
-                  if (next.every(Boolean)) router.replace('/(main)/discover');
-                }}
-              >
-                {item === 'backspace-outline' ? (
-                  <Ionicons name="backspace-outline" size={24} color={colors.text} />
-                ) : (
-                  <Text style={styles.keyText}>{item}</Text>
-                )}
-              </Pressable>
-            )
-          )}
-        </View>
-        <Pressable style={styles.resend}>
-          <Text style={styles.resendText}>Send again</Text>
-        </Pressable>
-      </SafeAreaView>
-    );
-  }
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardVisible(false);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  const login = async () => {
+    setError(null);
+    setSubmitting(true);
+
+    try {
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (authError) throw authError;
+      if (!data.session?.access_token) {
+        throw new Error('Login succeeded but no session was returned.');
+      }
+
+      await syncAuthUser(data.session.access_token);
+      router.replace('/(main)/discover');
+    } catch (err) {
+      setError(getLoginErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={[styles.numberContent, { paddingTop: numberTop }]}>
-        <Text style={styles.title}>My mobile</Text>
-        <Text style={styles.copy}>
-          Please enter your valid phone number. We will send you a 4-digit code to verify your
-          account.
-        </Text>
-        <View style={styles.phoneInput}>
-          <Text style={styles.flag}>🇺🇸</Text>
-          <Text style={styles.country}>(+1)</Text>
-          <Ionicons name="chevron-down" size={16} color={colors.grayIcon} />
-          <View style={styles.inputDivider} />
-          <TextInput
-            value="331 623 8413"
-            style={styles.input}
-            keyboardType="phone-pad"
-            placeholderTextColor={colors.grayIcon}
-          />
-        </View>
-      </View>
-      <View style={styles.footer}>
-        <PrimaryButton onPress={() => setStep('code')}>Continue</PrimaryButton>
-      </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboard}
+      >
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.content, { paddingTop: topSpacing }]}
+        >
+          <View>
+            {!keyboardVisible ? (
+              <View style={styles.logoArea}>
+                <LogoMark size={86} />
+              </View>
+            ) : null}
+
+            <Text style={styles.title}>Welcome back</Text>
+            <Text style={styles.copy}>
+              Log in with your Supabase email and password to continue.
+            </Text>
+
+            <View style={styles.field}>
+              <Ionicons name="mail-outline" size={20} color={colors.grayIcon} />
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                placeholder="Email"
+                placeholderTextColor={colors.grayIcon}
+                style={styles.input}
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Ionicons name="lock-closed-outline" size={20} color={colors.grayIcon} />
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                placeholder="Password"
+                placeholderTextColor={colors.grayIcon}
+                style={styles.input}
+              />
+            </View>
+
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+          </View>
+
+          <View style={styles.footer}>
+            <PrimaryButton onPress={submitting ? undefined : login}>
+              {submitting ? <ActivityIndicator color="#FFFFFF" /> : 'Log in'}
+            </PrimaryButton>
+            <View style={styles.registerRow}>
+              <Text style={styles.registerText}>New to PinMe? </Text>
+              <Pressable onPress={() => router.push('/(auth)/register')}>
+                <Text style={styles.registerLink}>Create account</Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -99,14 +152,19 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  keyboard: {
+    flex: 1,
     paddingHorizontal: 40,
   },
-  topBar: {
-    paddingTop: 22,
+  content: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
+    paddingBottom: 44,
   },
-  numberContent: {
-    flex: 1,
-    justifyContent: 'flex-start',
+  logoArea: {
+    alignItems: 'center',
+    marginBottom: 24,
   },
   title: {
     color: colors.text,
@@ -118,8 +176,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
     marginTop: 8,
+    marginBottom: 34,
   },
-  phoneInput: {
+  field: {
     height: 60,
     borderRadius: 14,
     borderWidth: 1,
@@ -127,96 +186,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
-    marginTop: 34,
-    gap: 8,
-  },
-  flag: {
-    fontSize: 20,
-  },
-  country: {
-    color: colors.text,
-    fontSize: 14,
-  },
-  inputDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: colors.line,
-    marginHorizontal: 12,
+    gap: 10,
+    marginBottom: 14,
   },
   input: {
     flex: 1,
     color: colors.text,
     fontSize: 15,
   },
-  footer: {
-    paddingBottom: 44,
-  },
-  codeHeader: {
-    alignItems: 'center',
-    marginTop: 28,
-  },
-  timer: {
-    color: colors.text,
-    fontSize: 36,
-    fontWeight: '900',
-  },
-  codeCopy: {
-    color: colors.muted,
-    textAlign: 'center',
-    fontSize: 17,
-    lineHeight: 25,
-    marginTop: 14,
-  },
-  codeBoxes: {
-    flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'center',
-    marginTop: 36,
-  },
-  codeBox: {
-    width: 68,
-    height: 72,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.line,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  codeBoxFilled: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  codeText: {
-    color: '#E4B2B9',
-    fontSize: 34,
-    fontWeight: '900',
-  },
-  codeTextFilled: {
-    color: '#FFFFFF',
-  },
-  keypad: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 42,
-  },
-  key: {
-    width: '33.333%',
-    height: 62,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  keyText: {
-    color: colors.text,
-    fontSize: 26,
-  },
-  resend: {
-    alignItems: 'center',
-    marginTop: 24,
-    paddingBottom: 26,
-  },
-  resendText: {
+  error: {
     color: colors.primary,
-    fontWeight: '900',
-    fontSize: 16,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 4,
+  },
+  footer: {
+    gap: 22,
+    paddingTop: 26,
+  },
+  registerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  registerText: {
+    color: colors.muted,
+    fontSize: 14,
+  },
+  registerLink: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

@@ -1,48 +1,230 @@
-import { FontAwesome, Ionicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { syncAuthUser } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton } from '@/design/system';
 
+type Gender = 'MALE' | 'FEMALE' | 'NON_BINARY' | 'OTHER';
+
+const genderOptions: Array<{ label: string; value: Gender }> = [
+  { label: 'Woman', value: 'FEMALE' },
+  { label: 'Man', value: 'MALE' },
+  { label: 'Non-binary', value: 'NON_BINARY' },
+  { label: 'Other', value: 'OTHER' },
+];
+
+function getRegistrationValidationError({
+  name,
+  email,
+  password,
+  birthday,
+}: {
+  name: string;
+  email: string;
+  password: string;
+  birthday: string;
+}) {
+  if (!name.trim()) {
+    return 'Name is required';
+  }
+
+  if (!email.trim()) {
+    return 'Email is required';
+  }
+
+  if (!password) {
+    return 'Password is required';
+  }
+
+  if (!birthday.trim()) {
+    return 'Birthday is required';
+  }
+
+  const birthdayDate = new Date(birthday);
+
+  if (Number.isNaN(birthdayDate.getTime())) {
+    return 'Birthday must be a valid date, e.g. 2000-01-01';
+  }
+
+  return null;
+}
+
 export default function RegisterScreen() {
+  const [name, setName] = useState('Mia');
+  const [email, setEmail] = useState('123@gmail.com');
+  const [password, setPassword] = useState('');
+  const [birthday, setBirthday] = useState('2000-01-01');
+  const [gender, setGender] = useState<Gender>('FEMALE');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const register = async () => {
+    setError(null);
+    setMessage(null);
+
+    const validationError = getRegistrationValidationError({
+      name,
+      email,
+      password,
+      birthday,
+    });
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      const { data, error: authError } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            name: name.trim(),
+            gender,
+            birthday,
+          },
+        },
+      });
+
+      if (authError) throw authError;
+
+      if (!data.session?.access_token) {
+        setMessage('Account created. Please confirm your email, then log in.');
+        return;
+      }
+
+      await syncAuthUser(data.session.access_token, {
+        name,
+        gender,
+        birthday,
+      });
+
+      router.replace('/(main)/discover');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create account');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={styles.logoArea}>
-        <LogoMark size={128} />
-      </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboard}
+      >
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.logoArea}>
+            <LogoMark size={84} />
+          </View>
 
-      <View style={styles.content}>
-        <Text style={styles.title}>Sign up to continue</Text>
-        <PrimaryButton onPress={() => router.push('/(auth)/create-profile')}>
-          Continue with email
-        </PrimaryButton>
-        <PrimaryButton variant="outline" onPress={() => router.push('/(auth)/login')}>
-          Use phone number
-        </PrimaryButton>
+          <Text style={styles.title}>Create your account</Text>
+          <Text style={styles.copy}>
+            Supabase creates the login account. PinMe syncs your required profile fields to the
+            backend.
+          </Text>
 
-        <View style={styles.dividerRow}>
-          <View style={styles.divider} />
-          <Text style={styles.dividerText}>or sign up with</Text>
-          <View style={styles.divider} />
-        </View>
+          <AuthField icon="person-outline" value={name} onChangeText={setName} placeholder="Name" />
+          <AuthField
+            icon="mail-outline"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="Email"
+            keyboardType="email-address"
+          />
+          <AuthField
+            icon="lock-closed-outline"
+            value={password}
+            onChangeText={setPassword}
+            placeholder="Password"
+            secureTextEntry
+          />
+          <AuthField
+            icon="calendar-outline"
+            value={birthday}
+            onChangeText={setBirthday}
+            placeholder="Birthday, e.g. 2000-01-01"
+          />
 
-        <View style={styles.socialRow}>
-          <Pressable style={styles.socialButton}>
-            <FontAwesome name="facebook-official" size={28} color={colors.primary} />
-          </Pressable>
-          <Pressable style={styles.socialButton}>
-            <Text style={styles.google}>G</Text>
-          </Pressable>
-          <Pressable style={styles.socialButton}>
-            <Ionicons name="logo-apple" size={31} color={colors.primary} />
-          </Pressable>
-        </View>
-      </View>
+          <Text style={styles.label}>Gender</Text>
+          <View style={styles.genderGrid}>
+            {genderOptions.map((option) => {
+              const selected = gender === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={[styles.genderOption, selected && styles.genderOptionSelected]}
+                  onPress={() => setGender(option.value)}
+                >
+                  <Text style={[styles.genderText, selected && styles.genderTextSelected]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
-      <View style={styles.legalRow}>
-        <Text style={styles.legal}>Terms of use</Text>
-        <Text style={styles.legal}>Privacy Policy</Text>
-      </View>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          {message ? <Text style={styles.message}>{message}</Text> : null}
+
+          <PrimaryButton onPress={submitting ? undefined : register} style={styles.submit}>
+            {submitting ? <ActivityIndicator color="#FFFFFF" /> : 'Create account'}
+          </PrimaryButton>
+
+          <View style={styles.signInRow}>
+            <Text style={styles.signInText}>Already have an account? </Text>
+            <Pressable onPress={() => router.push('/(auth)/login')}>
+              <Text style={styles.signInLink}>Sign In</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function AuthField({
+  icon,
+  ...props
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  keyboardType?: 'default' | 'email-address';
+  secureTextEntry?: boolean;
+}) {
+  return (
+    <View style={styles.field}>
+      <Ionicons name={icon} size={20} color={colors.grayIcon} />
+      <TextInput
+        {...props}
+        autoCapitalize="none"
+        placeholderTextColor={colors.grayIcon}
+        style={styles.input}
+      />
+    </View>
   );
 }
 
@@ -50,68 +232,109 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.bg,
-    paddingHorizontal: 28,
   },
-  logoArea: {
-    flex: 0.9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 34,
+  keyboard: {
+    flex: 1,
   },
   content: {
-    gap: 20,
+    paddingHorizontal: 32,
+    paddingTop: 32,
+    paddingBottom: 38,
+  },
+  logoArea: {
+    alignItems: 'center',
+    marginBottom: 18,
   },
   title: {
     color: colors.text,
-    fontSize: 18,
+    fontSize: 28,
     fontWeight: '900',
     textAlign: 'center',
-    marginBottom: 20,
   },
-  dividerRow: {
+  copy: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 24,
+  },
+  field: {
+    height: 58,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    marginTop: 34,
+    gap: 10,
+    paddingHorizontal: 16,
+    marginBottom: 12,
   },
-  divider: {
+  input: {
     flex: 1,
-    height: 1,
-    backgroundColor: '#E2E2E7',
-  },
-  dividerText: {
     color: colors.text,
-    fontSize: 12,
+    fontSize: 15,
   },
-  socialRow: {
+  label: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  genderGrid: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 20,
-    marginTop: 6,
+    flexWrap: 'wrap',
+    gap: 10,
   },
-  socialButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 14,
+  genderOption: {
+    width: '48%',
+    height: 44,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.line,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  google: {
-    color: colors.primary,
-    fontSize: 31,
-    fontWeight: '900',
+  genderOptionSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
-  legalRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 34,
-    paddingBottom: 34,
-    paddingTop: 40,
+  genderText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '800',
   },
-  legal: {
+  genderTextSelected: {
+    color: '#FFFFFF',
+  },
+  submit: {
+    marginTop: 18,
+  },
+  error: {
     color: colors.primary,
     fontSize: 13,
+    lineHeight: 19,
+    marginTop: 12,
+  },
+  message: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 12,
+  },
+  signInRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 22,
+  },
+  signInText: {
+    color: colors.muted,
+    fontSize: 14,
+  },
+  signInLink: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

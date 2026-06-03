@@ -1,9 +1,16 @@
+import { router } from 'expo-router';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EditableField, EditableTextArea, FormSection, PhotoUploadGrid } from '@/components/form';
 import { colors, IconButton, PrimaryButton } from '@/design/system';
 import { myPhotoSlots, myProfileFields, myProfilePrompts } from '@/data/mock';
+import { supabase } from '@/lib/supabase';
 
 export default function MyProfileScreen() {
+  const logout = async () => {
+    await supabase.auth.signOut();
+    router.replace('/(auth)/login');
+  };
+
   return (
     <View style={styles.screen}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -39,6 +46,12 @@ export default function MyProfileScreen() {
         <View style={styles.actionBar}>
           <PrimaryButton variant="outline">Preview</PrimaryButton>
           <PrimaryButton>Save changes</PrimaryButton>
+        </View>
+
+        <View style={styles.logoutSection}>
+          <PrimaryButton variant="soft" onPress={logout}>
+            Log out
+          </PrimaryButton>
         </View>
       </ScrollView>
     </View>
@@ -77,5 +90,8 @@ const styles = StyleSheet.create({
   actionBar: {
     gap: 12,
     marginTop: 28,
+  },
+  logoutSection: {
+    marginTop: 16,
   },
 });

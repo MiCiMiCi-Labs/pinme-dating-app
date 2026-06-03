@@ -51,7 +51,10 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
-    const { name, gender, birthday } = req.body;
+    const metadata = authUser.user_metadata ?? {};
+    const name = req.body.name ?? metadata.name;
+    const gender = req.body.gender ?? metadata.gender;
+    const birthday = req.body.birthday ?? metadata.birthday;
     const parsedBirthday = parseBirthday(birthday);
     const validationErrors: string[] = [];
 

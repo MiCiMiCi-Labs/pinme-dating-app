@@ -20,7 +20,7 @@ function RootNavigator() {
     const inMain = segments[0] === '(main)';
     const inAuth = segments[0] === '(auth)';
 
-    if (session && !inMain) {
+    if (session && !inMain && !inAuth) {
       router.replace('/(main)/discover');
     } else if (!session && inMain && !__DEV__) {
       router.replace('/');
