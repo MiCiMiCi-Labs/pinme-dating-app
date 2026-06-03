@@ -7,7 +7,7 @@ import { AuthProvider, useAuth } from '@/contexts/auth';
 SplashScreen.preventAutoHideAsync();
 
 function RootNavigator() {
-  const { session, loading } = useAuth();
+  const { session, loading, profileComplete, profileCompletionLoading } = useAuth();
   const segments = useSegments();
 
   useEffect(() => {
@@ -15,19 +15,22 @@ function RootNavigator() {
   }, [loading]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || profileCompletionLoading) return;
 
     const inMain = segments[0] === '(main)';
     const inAuth = segments[0] === '(auth)';
+    const inCompleteProfile = inAuth && segments[1] === 'complete-profile';
 
-    if (session && !inMain && !inAuth) {
+    if (session && !profileComplete && !inCompleteProfile) {
+      router.replace('/(auth)/complete-profile');
+    } else if (session && profileComplete && !inMain && !inAuth) {
       router.replace('/(main)/discover');
     } else if (!session && inMain && !__DEV__) {
       router.replace('/');
     }
-  }, [session, loading, segments]);
+  }, [session, loading, profileComplete, profileCompletionLoading, segments]);
 
-  if (loading) return null;
+  if (loading || profileCompletionLoading) return null;
 
   return (
     <>
