@@ -14,7 +14,10 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "PinMe needs your location to show nearby people.",
         "NSPhotoLibraryUsageDescription": "PinMe needs access to your photos to update your profile.",
-        "NSCameraUsageDescription": "PinMe needs camera access to take profile photos."
+        "NSCameraUsageDescription": "PinMe needs camera access to take profile photos.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {

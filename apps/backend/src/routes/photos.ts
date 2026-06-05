@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { requireAuth } from '../middleware/auth';
-import { getMyPhotos, uploadPhoto, deletePhoto } from '../controllers/photos';
+import { getMyPhotos, uploadPhoto, deletePhoto, setPrimaryPhoto } from '../controllers/photos';
 import { ALLOWED_TYPES, MAX_FILE_SIZE } from '../lib/storage';
 
 const upload = multer({
@@ -25,6 +25,9 @@ router.get('/me', getMyPhotos);
 
 // POST /api/v1/photos  (multipart/form-data, field: "photo")
 router.post('/', upload.single('photo'), uploadPhoto);
+
+// PATCH  /api/v1/photos/:photoId/primary
+router.patch('/:photoId/primary', setPrimaryPhoto);
 
 // DELETE /api/v1/photos/:photoId
 router.delete('/:photoId', deletePhoto);
