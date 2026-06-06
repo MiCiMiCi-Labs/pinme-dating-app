@@ -1,5 +1,6 @@
 import { Image } from 'expo-image';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { router } from 'expo-router';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/design/system';
 
@@ -21,25 +22,55 @@ export function FormSection({
   );
 }
 
-export function EditableField({ label, value }: { label: string; value: string }) {
+export function EditableField({
+  label,
+  value,
+  onChangeText,
+}: {
+  label: string;
+  value: string;
+  onChangeText?: (text: string) => void;
+}) {
   return (
-    <View style={styles.field}>
+    <View style={[styles.field, !onChangeText && styles.fieldReadOnly]}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput value={value} style={styles.input} />
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        editable={!!onChangeText}
+        style={styles.input}
+      />
     </View>
   );
 }
 
-export function EditableTextArea({ value }: { value: string }) {
+export function EditableTextArea({
+  value,
+  onChangeText,
+  placeholder,
+}: {
+  value: string;
+  onChangeText?: (text: string) => void;
+  placeholder?: string;
+}) {
   return (
     <View style={styles.textArea}>
-      <TextInput multiline value={value} style={styles.textAreaInput} />
+      <TextInput
+        multiline
+        value={value}
+        onChangeText={onChangeText}
+        editable={!!onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={colors.muted}
+        style={styles.textAreaInput}
+      />
     </View>
   );
 }
 
 export function PhotoUploadGrid({ photos }: { photos: Array<string | null> }) {
   return (
+    <Pressable onPress={() => router.push('/(main)/profile/photos')}>
     <View style={styles.photoGrid}>
       {photos.map((photo, index) => (
         <View key={`${photo ?? 'empty'}-${index}`} style={[styles.photoSlot, index === 0 && styles.primaryPhoto]}>
@@ -59,6 +90,7 @@ export function PhotoUploadGrid({ photos }: { photos: Array<string | null> }) {
         </View>
       ))}
     </View>
+    </Pressable>
   );
 }
 
@@ -87,6 +119,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     backgroundColor: '#FFFFFF',
     marginBottom: 12,
+  },
+  fieldReadOnly: {
+    backgroundColor: '#F7F7F9',
   },
   label: {
     color: colors.muted,
