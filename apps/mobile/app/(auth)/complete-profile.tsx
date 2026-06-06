@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@/contexts/auth';
 import { colors, PrimaryButton } from '@/design/system';
+import { updateMyProfileData, type RelationshipGoal } from '@/lib/api';
 import { searchCities, type CitySuggestion } from '@/lib/places';
 
 type ProfileForm = {
@@ -51,16 +52,15 @@ const requiredFields: Array<{ key: keyof ProfileForm; label: string; placeholder
   { key: 'prompt2', label: 'Prompt 2', placeholder: 'I get along best with...' },
 ];
 
-const relationshipGoalOptions = [
-  'Long-term relationship',
-  'Short-term relationship',
-  'Casual dating',
-  'New friends',
-  'Still figuring it out',
+const relationshipGoalOptions: Array<{ label: string; value: RelationshipGoal }> = [
+  { label: 'Long-term relationship', value: 'SERIOUS' },
+  { label: 'Casual dating', value: 'CASUAL' },
+  { label: 'New friends', value: 'FRIENDSHIP' },
+  { label: 'Still figuring it out', value: 'UNDECIDED' },
 ];
 
 export default function CompleteProfileScreen() {
-  const { markProfileComplete } = useAuth();
+  const { session, markProfileComplete } = useAuth();
   const [form, setForm] = useState<ProfileForm>(initialForm);
   const [selectedCityPlaceId, setSelectedCityPlaceId] = useState<string | null>(null);
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
@@ -68,6 +68,7 @@ export default function CompleteProfileScreen() {
   const [citySearchError, setCitySearchError] = useState<string | null>(null);
   const [photos, setPhotos] = useState<Array<string | null>>([null, null, null, null, null, null]);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const uploadedPhotoCount = photos.filter(Boolean).length;
   const detailFields = useMemo(() => requiredFields.filter((field) => field.key !== 'city'), []);
 
@@ -161,6 +162,13 @@ export default function CompleteProfileScreen() {
   const continueToApp = async () => {
     setError(null);
 
+    const accessToken = session?.access_token;
+
+    if (!accessToken) {
+      setError('Please log in again before completing your profile.');
+      return;
+    }
+
     const missingField = requiredFields.find(({ key }) => !form[key].trim());
 
     if (missingField) {
@@ -180,18 +188,48 @@ export default function CompleteProfileScreen() {
       return;
     }
 
-    if (!relationshipGoalOptions.includes(form.relationshipGoal)) {
+    const relationshipGoal = relationshipGoalOptions.find(
+      (option) => option.value === form.relationshipGoal
+    );
+
+    if (!relationshipGoal) {
       setError('Please choose a relationship goal.');
       return;
     }
 
-    if (uploadedPhotoCount < 3) {
-      setError('Please upload at least 3 photos before continuing.');
-      return;
-    }
+    // #cici attention: photo upload is intentionally skipped for now.
+    // Later this should require/upload photos through POST /api/v1/photos.
 
-    await markProfileComplete();
-    router.replace('/(main)/discover');
+    setSaving(true);
+
+    try {
+      await updateMyProfileData(accessToken, {
+        city: form.city,
+        bio: form.bio,
+        height: heightInCm,
+        education: form.education,
+        jobTitle: form.jobTitle,
+        company: form.company || null,
+        relationshipGoal: relationshipGoal.value,
+        prompt1: form.prompt1,
+        prompt2: form.prompt2,
+      });
+      const complete = await markProfileComplete();
+
+      if (!complete) {
+        setError('Profile is still incomplete. Please fill all required fields.');
+        return;
+      }
+
+      router.replace('/(main)/discover');
+    } catch (profileError) {
+      setSaving(false);
+      setError(
+        profileError instanceof Error ? profileError.message : 'Failed to complete your profile'
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -216,7 +254,7 @@ export default function CompleteProfileScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Photos</Text>
-              <Text style={styles.counter}>{uploadedPhotoCount}/3 required</Text>
+              <Text style={styles.counter}>Skipped for now</Text>
             </View>
             <View style={styles.photoGrid}>
               {photos.map((photo, index) => (
@@ -300,16 +338,16 @@ export default function CompleteProfileScreen() {
               <Text style={styles.label}>Relationship goal</Text>
               <View style={styles.optionGrid}>
                 {relationshipGoalOptions.map((goal) => {
-                  const selected = form.relationshipGoal === goal;
+                  const selected = form.relationshipGoal === goal.value;
 
                   return (
                     <Pressable
-                      key={goal}
-                      onPress={() => updateField('relationshipGoal', goal)}
+                      key={goal.value}
+                      onPress={() => updateField('relationshipGoal', goal.value)}
                       style={[styles.optionPill, selected && styles.optionPillSelected]}
                     >
                       <Text style={[styles.optionText, selected && styles.optionTextSelected]}>
-                        {goal}
+                        {goal.label}
                       </Text>
                     </Pressable>
                   );
@@ -338,21 +376,10 @@ export default function CompleteProfileScreen() {
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <PrimaryButton onPress={continueToApp} style={styles.button}>
-            Continue to Discover
+          <PrimaryButton onPress={saving ? undefined : continueToApp} style={styles.button}>
+            {saving ? 'Saving profile...' : 'Continue to Discover'}
           </PrimaryButton>
 
-          {__DEV__ ? (
-            <Pressable
-              onPress={async () => {
-                await markProfileComplete();
-                router.replace('/(main)/discover');
-              }}
-              style={styles.devSkip}
-            >
-              <Text style={styles.devSkipText}>[ Dev: skip profile setup ]</Text>
-            </Pressable>
-          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -572,14 +599,5 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: 22,
-  },
-  devSkip: {
-    alignItems: 'center',
-    paddingVertical: 18,
-  },
-  devSkipText: {
-    color: colors.muted,
-    fontSize: 12,
-    fontWeight: '700',
   },
 });

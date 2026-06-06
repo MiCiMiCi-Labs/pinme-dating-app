@@ -21,19 +21,48 @@ export function FormSection({
   );
 }
 
-export function EditableField({ label, value }: { label: string; value: string }) {
+export function EditableField({
+  label,
+  value,
+  onChangeText,
+}: {
+  label: string;
+  value: string;
+  onChangeText?: (text: string) => void;
+}) {
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput value={value} style={styles.input} />
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        editable={Boolean(onChangeText)}
+        style={styles.input}
+      />
     </View>
   );
 }
 
-export function EditableTextArea({ value }: { value: string }) {
+export function EditableTextArea({
+  value,
+  onChangeText,
+  placeholder,
+}: {
+  value: string;
+  onChangeText?: (text: string) => void;
+  placeholder?: string;
+}) {
   return (
     <View style={styles.textArea}>
-      <TextInput multiline value={value} style={styles.textAreaInput} />
+      <TextInput
+        multiline
+        value={value}
+        onChangeText={onChangeText}
+        editable={Boolean(onChangeText)}
+        placeholder={placeholder}
+        placeholderTextColor={colors.muted}
+        style={styles.textAreaInput}
+      />
     </View>
   );
 }
