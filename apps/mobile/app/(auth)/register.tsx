@@ -13,7 +13,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { syncAuthUser } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton } from '@/design/system';
 
@@ -105,18 +104,14 @@ export default function RegisterScreen() {
 
       if (authError) throw authError;
 
-      if (!data.session?.access_token) {
-        setMessage('Account created. Please confirm your email, then log in.');
-        return;
+      if (data.session) {
+        await supabase.auth.signOut();
       }
 
-      await syncAuthUser(data.session.access_token, {
-        name,
-        gender,
-        birthday,
+      router.replace({
+        pathname: '/(auth)/confirm-email',
+        params: { email: email.trim() },
       });
-
-      router.replace('/(main)/discover');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create account');
     } finally {
