@@ -83,6 +83,37 @@ export async function uploadPhoto(req: Request, res: Response) {
   }
 }
 
+export async function setPrimaryPhoto(req: Request, res: Response) {
+  try {
+    const photoId = req.params.photoId as string;
+
+    const dbUserId = await resolveDbUserId(req.userId!);
+    if (!dbUserId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const photo = await prisma.photo.findFirst({
+      where: { id: photoId, userId: dbUserId },
+    });
+
+    if (!photo) {
+      res.status(404).json({ error: 'Photo not found' });
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.photo.updateMany({ where: { userId: dbUserId }, data: { isPrimary: false } }),
+      prisma.photo.update({ where: { id: photoId }, data: { isPrimary: true } }),
+    ]);
+
+    const updated = await prisma.photo.findUnique({ where: { id: photoId } });
+    res.json(updated);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 export async function deletePhoto(req: Request, res: Response) {
   try {
     const photoId = req.params.photoId as string;

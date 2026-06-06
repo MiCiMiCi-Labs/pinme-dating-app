@@ -1,5 +1,6 @@
 import { Image } from 'expo-image';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { router } from 'expo-router';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/design/system';
 
@@ -31,7 +32,7 @@ export function EditableField({
   onChangeText?: (text: string) => void;
 }) {
   return (
-    <View style={styles.field}>
+    <View style={[styles.field, !onChangeText && styles.fieldReadOnly]}>
       <Text style={styles.label}>{label}</Text>
       <TextInput
         value={value}
@@ -69,6 +70,7 @@ export function EditableTextArea({
 
 export function PhotoUploadGrid({ photos }: { photos: Array<string | null> }) {
   return (
+    <Pressable onPress={() => router.push('/(main)/profile/photos')}>
     <View style={styles.photoGrid}>
       {photos.map((photo, index) => (
         <View key={`${photo ?? 'empty'}-${index}`} style={[styles.photoSlot, index === 0 && styles.primaryPhoto]}>
@@ -88,6 +90,7 @@ export function PhotoUploadGrid({ photos }: { photos: Array<string | null> }) {
         </View>
       ))}
     </View>
+    </Pressable>
   );
 }
 
@@ -116,6 +119,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     backgroundColor: '#FFFFFF',
     marginBottom: 12,
+  },
+  fieldReadOnly: {
+    backgroundColor: '#F7F7F9',
   },
   label: {
     color: colors.muted,

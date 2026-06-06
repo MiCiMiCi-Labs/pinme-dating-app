@@ -86,6 +86,32 @@ export async function syncAuthUser(accessToken: string, body?: SyncUserInput) {
   return parseResponse<{ message: string; user: unknown }>(response);
 }
 
+// ─── User & Profile ────────────────────────────────────────────────────────
+
+export type AppProfile = {
+  id: string;
+  height: number | null;
+  education: string | null;
+  jobTitle: string | null;
+  company: string | null;
+  relationshipGoal: string | null;
+  drinking: string | null;
+  smoking: string | null;
+  mbti: string | null;
+  constellation: string | null;
+  prompt1: string | null;
+  prompt2: string | null;
+};
+
+export type AppUser = {
+  id: string;
+  name: string;
+  email: string;
+  gender: string;
+  birthday: string;
+  profile: AppProfile | null;
+};
+
 export async function getCurrentAppUser(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
     headers: authHeaders(accessToken),
@@ -111,6 +137,10 @@ export async function updateMyProfileData(accessToken: string, data: ProfileUpda
     },
     body: JSON.stringify(data),
   });
+  return parseResponse<{ message: string; profile: AppProfile }>(response);
+}
+
+// ─── Photos ────────────────────────────────────────────────────────────────
 
   return parseResponse<{ message: string; user: Omit<AppUser, 'profile'>; profile: AppProfile }>(
     response
