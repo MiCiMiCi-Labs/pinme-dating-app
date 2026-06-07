@@ -37,7 +37,7 @@ export function EditableField({
       <TextInput
         value={value}
         onChangeText={onChangeText}
-        editable={!!onChangeText}
+        editable={Boolean(onChangeText)}
         style={styles.input}
       />
     </View>
@@ -59,7 +59,7 @@ export function EditableTextArea({
         multiline
         value={value}
         onChangeText={onChangeText}
-        editable={!!onChangeText}
+        editable={Boolean(onChangeText)}
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         style={styles.textAreaInput}

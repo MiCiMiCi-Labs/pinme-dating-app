@@ -21,11 +21,11 @@ function RootNavigator() {
     const inAuth = segments[0] === '(auth)';
     const inCompleteProfile = inAuth && segments[1] === 'complete-profile';
 
-    if (session && !profileComplete && !inCompleteProfile) {
+    if (session && !profileComplete && inMain) {
       router.replace('/(auth)/complete-profile');
     } else if (session && profileComplete && !inMain && !inAuth) {
       router.replace('/(main)/discover');
-    } else if (!session && inMain && !__DEV__) {
+    } else if (!session && inMain) {
       router.replace('/');
     }
   }, [session, loading, profileComplete, profileCompletionLoading, segments]);

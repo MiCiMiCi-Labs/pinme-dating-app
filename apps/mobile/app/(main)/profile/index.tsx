@@ -3,22 +3,23 @@ import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EditableField, EditableTextArea, FormSection, PhotoUploadGrid } from '@/components/form';
 import { colors, IconButton, PrimaryButton } from '@/design/system';
+import { photos } from '@/design/system';
 import {
   getCurrentAppUser,
-  getMyPhotos,
   updateMyProfileData,
   type AppUser,
+  type RelationshipGoal,
 } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
-const MAX_SLOTS = 6;
-
 type ProfileDraft = {
+  city: string;
+  bio: string;
+  height: string;
+  education: string;
   jobTitle: string;
   company: string;
-  education: string;
-  height: string;
-  relationshipGoal: string;
+  relationshipGoal: RelationshipGoal | '';
   drinking: string;
   smoking: string;
   mbti: string;
@@ -28,10 +29,12 @@ type ProfileDraft = {
 };
 
 const emptyDraft: ProfileDraft = {
+  city: '',
+  bio: '',
+  height: '',
+  education: '',
   jobTitle: '',
   company: '',
-  education: '',
-  height: '',
   relationshipGoal: '',
   drinking: '',
   smoking: '',
@@ -41,83 +44,129 @@ const emptyDraft: ProfileDraft = {
   prompt2: '',
 };
 
+const relationshipGoalOptions: Array<{ label: string; value: RelationshipGoal }> = [
+  { label: 'Long-term relationship', value: 'SERIOUS' },
+  { label: 'Casual dating', value: 'CASUAL' },
+  { label: 'New friends', value: 'FRIENDSHIP' },
+  { label: 'Still figuring it out', value: 'UNDECIDED' },
+];
+
 function draftFromUser(user: AppUser): ProfileDraft {
-  const p = user.profile;
+  const profile = user.profile;
+
   return {
-    jobTitle: p?.jobTitle ?? '',
-    company: p?.company ?? '',
-    education: p?.education ?? '',
-    height: p?.height != null ? String(p.height) : '',
-    relationshipGoal: p?.relationshipGoal ?? '',
-    drinking: p?.drinking ?? '',
-    smoking: p?.smoking ?? '',
-    mbti: p?.mbti ?? '',
-    constellation: p?.constellation ?? '',
-    prompt1: p?.prompt1 ?? '',
-    prompt2: p?.prompt2 ?? '',
+    city: user.city ?? '',
+    bio: user.bio ?? '',
+    height: profile?.height != null ? String(profile.height) : '',
+    education: profile?.education ?? '',
+    jobTitle: profile?.jobTitle ?? '',
+    company: profile?.company ?? '',
+    relationshipGoal: profile?.relationshipGoal ?? '',
+    drinking: profile?.drinking ?? '',
+    smoking: profile?.smoking ?? '',
+    mbti: profile?.mbti ?? '',
+    constellation: profile?.constellation ?? '',
+    prompt1: profile?.prompt1 ?? '',
+    prompt2: profile?.prompt2 ?? '',
   };
 }
 
 export default function MyProfileScreen() {
-  const [photoSlots, setPhotoSlots] = useState<Array<string | null>>(Array(MAX_SLOTS).fill(null));
   const [user, setUser] = useState<AppUser | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
-      (async () => {
-        const { data: { session } } = await supabase.auth.getSession();
+      let cancelled = false;
+
+      async function loadProfile() {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
         if (!session) return;
+
         try {
-          const [photos, { user: appUser }] = await Promise.all([
-            getMyPhotos(session.access_token),
-            getCurrentAppUser(session.access_token),
-          ]);
-          const slots: Array<string | null> = Array(MAX_SLOTS).fill(null);
-          photos.forEach((p, i) => { if (i < MAX_SLOTS) slots[i] = p.url; });
-          setPhotoSlots(slots);
-          setUser(appUser);
-          setDraft(draftFromUser(appUser));
-        } catch {
-          // keep existing state on error
+          setLoading(true);
+          const { user: appUser } = await getCurrentAppUser(session.access_token);
+
+          if (!cancelled) {
+            setUser(appUser);
+            setDraft(draftFromUser(appUser));
+          }
+        } catch (error) {
+          if (!cancelled) {
+            Alert.alert(
+              'Profile error',
+              error instanceof Error ? error.message : 'Failed to load profile.'
+            );
+          }
+        } finally {
+          if (!cancelled) {
+            setLoading(false);
+          }
         }
-      })();
+      }
+
+      loadProfile();
+
+      return () => {
+        cancelled = true;
+      };
     }, [])
   );
 
-  const set = (key: keyof ProfileDraft) => (value: string) =>
-    setDraft(prev => ({ ...prev, [key]: value }));
+  const set = (key: keyof ProfileDraft) => (value: string) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
 
-  const validate = (): string | null => {
+  const validate = () => {
     if (draft.height) {
-      const h = parseInt(draft.height, 10);
-      if (isNaN(h) || h < 90 || h > 250) {
-        return 'Height must be a number between 90 and 250.';
+      const height = Number(draft.height);
+
+      if (!Number.isInteger(height) || height < 120 || height > 230) {
+        return 'Height must be between 120 and 230 cm.';
       }
     }
+
     if (draft.mbti && draft.mbti.length > 4) {
-      return 'MBTI type should be 4 characters or fewer (e.g. INFJ).';
+      return 'MBTI should be 4 characters or fewer.';
     }
+
     return null;
   };
 
   const saveChanges = async () => {
     if (saving) return;
+
     const validationError = validate();
+
     if (validationError) {
       Alert.alert('Invalid input', validationError);
       return;
     }
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      router.replace('/(auth)/login');
+      return;
+    }
+
     setSaving(true);
+
     try {
-      await updateMyProfileData(session.access_token, {
+      const result = await updateMyProfileData(session.access_token, {
+        city: draft.city || null,
+        bio: draft.bio || null,
+        height: draft.height ? Number(draft.height) : null,
+        education: draft.education || null,
         jobTitle: draft.jobTitle || null,
         company: draft.company || null,
-        education: draft.education || null,
-        height: draft.height ? parseInt(draft.height, 10) : null,
         relationshipGoal: draft.relationshipGoal || null,
         drinking: draft.drinking || null,
         smoking: draft.smoking || null,
@@ -126,9 +175,18 @@ export default function MyProfileScreen() {
         prompt1: draft.prompt1 || null,
         prompt2: draft.prompt2 || null,
       });
+
+      const nextUser: AppUser = {
+        ...result.user,
+        profile: result.profile,
+      };
+
+      setUser(nextUser);
+      setDraft(draftFromUser(nextUser));
       Alert.alert('Saved', 'Your profile has been updated.');
-    } catch (e) {
-      Alert.alert('Error', e instanceof Error ? e.message : 'Failed to save profile.');
+    } catch (error) {
+      setSaving(false);
+      Alert.alert('Save failed', error instanceof Error ? error.message : 'Failed to save profile.');
     } finally {
       setSaving(false);
     }
@@ -139,9 +197,7 @@ export default function MyProfileScreen() {
     router.replace('/(auth)/login');
   };
 
-  const birthdayDisplay = user?.birthday
-    ? new Date(user.birthday).toLocaleDateString()
-    : '';
+  const birthdayDisplay = user?.birthday ? new Date(user.birthday).toLocaleDateString() : '';
 
   return (
     <View style={styles.screen}>
@@ -149,49 +205,82 @@ export default function MyProfileScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>My profile</Text>
-            <Text style={styles.subtitle}>Photos, personal details, and dating preferences</Text>
+            <Text style={styles.subtitle}>
+              {loading ? 'Loading profile...' : 'Edit the details stored in your backend profile'}
+            </Text>
           </View>
           <IconButton icon="settings-outline" />
         </View>
 
-        <PhotoUploadGrid photos={photoSlots} />
+        {/* #cici attention: photo upload/edit is intentionally disabled in this pass. */}
+        <PhotoUploadGrid photos={[photos.portrait, null, null, null, null, null]} />
 
-        <FormSection title="Basic info">
+        <FormSection title="Account">
           <EditableField label="Name" value={user?.name ?? ''} />
           <EditableField label="Email" value={user?.email ?? ''} />
           <EditableField label="Gender" value={user?.gender ?? ''} />
           <EditableField label="Birthday" value={birthdayDisplay} />
         </FormSection>
 
-        <FormSection title="Profile details" helper="Tap a field to edit.">
+        <FormSection title="Profile details" helper="These fields save to /api/v1/profiles/me.">
+          <EditableField label="City" value={draft.city} onChangeText={set('city')} />
+          <EditableField label="Height (cm)" value={draft.height} onChangeText={set('height')} />
+          <EditableField label="Education" value={draft.education} onChangeText={set('education')} />
           <EditableField label="Job title" value={draft.jobTitle} onChangeText={set('jobTitle')} />
           <EditableField label="Company" value={draft.company} onChangeText={set('company')} />
-          <EditableField label="Education" value={draft.education} onChangeText={set('education')} />
-          <EditableField label="Height (cm)" value={draft.height} onChangeText={set('height')} />
-          <EditableField label="Relationship goal" value={draft.relationshipGoal} onChangeText={set('relationshipGoal')} />
           <EditableField label="Drinking" value={draft.drinking} onChangeText={set('drinking')} />
           <EditableField label="Smoking" value={draft.smoking} onChangeText={set('smoking')} />
           <EditableField label="MBTI" value={draft.mbti} onChangeText={set('mbti')} />
-          <EditableField label="Constellation" value={draft.constellation} onChangeText={set('constellation')} />
+          <EditableField
+            label="Constellation"
+            value={draft.constellation}
+            onChangeText={set('constellation')}
+          />
+        </FormSection>
+
+        <FormSection title="Relationship goal">
+          <View style={styles.optionGrid}>
+            {relationshipGoalOptions.map((goal) => {
+              const selected = draft.relationshipGoal === goal.value;
+
+              return (
+                <Text
+                  key={goal.value}
+                  onPress={() => set('relationshipGoal')(goal.value)}
+                  style={[styles.optionPill, selected && styles.optionPillSelected]}
+                >
+                  {goal.label}
+                </Text>
+              );
+            })}
+          </View>
+        </FormSection>
+
+        <FormSection title="Bio">
+          <EditableTextArea
+            value={draft.bio}
+            onChangeText={set('bio')}
+            placeholder="Tell people a little about you..."
+          />
         </FormSection>
 
         <FormSection title="Prompts">
           <EditableTextArea
             value={draft.prompt1}
             onChangeText={set('prompt1')}
-            placeholder="Tell people something about yourself…"
+            placeholder="A perfect weekend is..."
           />
           <EditableTextArea
             value={draft.prompt2}
             onChangeText={set('prompt2')}
-            placeholder="Add a second prompt…"
+            placeholder="I get along best with..."
           />
         </FormSection>
 
         <View style={styles.actionBar}>
           <PrimaryButton variant="outline">Preview</PrimaryButton>
           <PrimaryButton onPress={saveChanges}>
-            {saving ? 'Saving…' : 'Save changes'}
+            {saving ? 'Saving...' : 'Save changes'}
           </PrimaryButton>
         </View>
 
@@ -233,6 +322,27 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 6,
     maxWidth: 250,
+  },
+  optionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  optionPill: {
+    overflow: 'hidden',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '800',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  optionPillSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+    color: '#FFFFFF',
   },
   actionBar: {
     gap: 12,

@@ -8,6 +8,8 @@ const nullableString = (max: number) =>
 
 const profileSchema = z
   .object({
+    city: nullableString(120),
+    bio: nullableString(500),
     height: z.number().int().min(90).max(250).nullable().optional(),
     education: nullableString(120),
     jobTitle: nullableString(120),
@@ -25,7 +27,15 @@ const profileSchema = z
 async function getCurrentAppUser(authUserId: string) {
   return prisma.user.findUnique({
     where: { supabaseAuthId: authUserId },
-    select: { id: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      gender: true,
+      birthday: true,
+      city: true,
+      bio: true,
+    },
   });
 }
 
@@ -51,7 +61,7 @@ export async function getMyProfile(req: Request, res: Response) {
       where: { userId: user.id },
     });
 
-    res.status(200).json({ profile });
+    res.status(200).json({ user, profile });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ message: 'Failed to get profile' });
@@ -86,17 +96,38 @@ export async function updateMyProfile(req: Request, res: Response) {
       return;
     }
 
-    const profile = await prisma.profile.upsert({
-      where: { userId: user.id },
-      update: parsedBody.data,
-      create: {
-        userId: user.id,
-        ...parsedBody.data,
-      },
-    });
+    const { city, bio, ...profileData } = parsedBody.data;
+
+    const [updatedUser, profile] = await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          ...(city !== undefined ? { city } : {}),
+          ...(bio !== undefined ? { bio } : {}),
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          gender: true,
+          birthday: true,
+          city: true,
+          bio: true,
+        },
+      }),
+      prisma.profile.upsert({
+        where: { userId: user.id },
+        update: profileData,
+        create: {
+          userId: user.id,
+          ...profileData,
+        },
+      }),
+    ]);
 
     res.status(200).json({
       message: 'Profile updated successfully',
+      user: updatedUser,
       profile,
     });
   } catch (error) {

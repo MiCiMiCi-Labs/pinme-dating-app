@@ -1,14 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
-import { getProfileCompletion, setProfileCompletion } from '@/lib/profileCompletion';
+import { getMyProfile, type AppProfile, type AppUser } from '@/lib/api';
 
 type AuthContextType = {
   session: Session | null;
   loading: boolean;
   profileComplete: boolean;
   profileCompletionLoading: boolean;
-  markProfileComplete: () => Promise<void>;
+  refreshProfileCompletion: () => Promise<boolean>;
+  markProfileComplete: () => Promise<boolean>;
 };
 
 const AuthContext = createContext<AuthContextType>({
@@ -16,8 +17,24 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   profileComplete: false,
   profileCompletionLoading: true,
-  markProfileComplete: async () => {},
+  refreshProfileCompletion: async () => false,
+  markProfileComplete: async () => false,
 });
+
+function hasCompleteProfile(user: Omit<AppUser, 'profile'>, profile: AppProfile | null) {
+  return Boolean(
+    user.city?.trim() &&
+      user.bio?.trim() &&
+      profile?.height &&
+      profile.height >= 120 &&
+      profile.height <= 230 &&
+      profile.education?.trim() &&
+      profile.jobTitle?.trim() &&
+      profile.relationshipGoal &&
+      profile.prompt1?.trim() &&
+      profile.prompt2?.trim()
+  );
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -44,14 +61,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function loadProfileCompletion() {
-      if (!session?.user.id) {
+      if (!session?.access_token) {
         setProfileComplete(false);
         setProfileCompletionLoading(false);
         return;
       }
 
       setProfileCompletionLoading(true);
-      const complete = await getProfileCompletion(session.user.id);
+
+      let complete = false;
+
+      try {
+        const { user, profile } = await getMyProfile(session.access_token);
+        complete = hasCompleteProfile(user, profile);
+      } catch {
+        complete = false;
+      }
 
       if (!cancelled) {
         setProfileComplete(complete);
@@ -64,14 +89,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [session?.user.id]);
+  }, [session?.access_token]);
 
-  const markProfileComplete = async () => {
-    if (!session?.user.id) return;
+  const refreshProfileCompletion = async () => {
+    if (!session?.access_token) {
+      setProfileComplete(false);
+      return false;
+    }
 
-    await setProfileCompletion(session.user.id, true);
-    setProfileComplete(true);
+    try {
+      const { user, profile } = await getMyProfile(session.access_token);
+      const complete = hasCompleteProfile(user, profile);
+      setProfileComplete(complete);
+      return complete;
+    } catch {
+      setProfileComplete(false);
+      return false;
+    }
   };
+
+  const markProfileComplete = refreshProfileCompletion;
 
   return (
     <AuthContext.Provider
@@ -80,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         profileComplete,
         profileCompletionLoading,
+        refreshProfileCompletion,
         markProfileComplete,
       }}
     >
