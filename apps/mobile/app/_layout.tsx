@@ -11,8 +11,8 @@ function RootNavigator() {
   const segments = useSegments();
 
   useEffect(() => {
-    if (!loading) SplashScreen.hideAsync();
-  }, [loading]);
+    if (!loading && !profileCompletionLoading) SplashScreen.hideAsync();
+  }, [loading, profileCompletionLoading]);
 
   useEffect(() => {
     if (loading || profileCompletionLoading) return;
@@ -23,6 +23,8 @@ function RootNavigator() {
 
     if (session && !profileComplete && inMain) {
       router.replace('/(auth)/complete-profile');
+    } else if (session && profileComplete && inCompleteProfile) {
+      router.replace('/(main)/discover');
     } else if (session && profileComplete && !inMain && !inAuth) {
       router.replace('/(main)/discover');
     } else if (!session && inMain) {
