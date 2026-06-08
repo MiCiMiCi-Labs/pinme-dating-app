@@ -1,52 +1,76 @@
+﻿import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, photos, PrimaryButton } from '@/design/system';
-
-type SwipeMode = 'idle' | 'like' | 'nope';
+import { colors, PrimaryButton } from '@/design/system';
+import { type DiscoveryUser } from '@/lib/api';
 
 export function DiscoverCard({
-  person,
+  user,
   height,
-  mode,
+  pan,
+  panHandlers,
 }: {
-  person: { id: string; name: string; age: number; role: string; distance: string; image: string };
+  user: DiscoveryUser;
   height: number;
-  mode: SwipeMode;
+  pan: Animated.ValueXY;
+  panHandlers: object;
 }) {
+  const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+  const photoUrl = primaryPhoto?.url ?? '';
+
+  const rotate = pan.x.interpolate({
+    inputRange: [-200, 0, 200],
+    outputRange: ['-15deg', '0deg', '15deg'],
+    extrapolate: 'clamp',
+  });
+
+  const likeOpacity = pan.x.interpolate({
+    inputRange: [20, 80],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  const nopeOpacity = pan.x.interpolate({
+    inputRange: [-80, -20],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
   return (
-    <Pressable
-      onPress={() => router.push({ pathname: '/(main)/discover/[userId]', params: { userId: person.id } })}
-      style={[styles.card, { height }, mode === 'like' && styles.likeCard, mode === 'nope' && styles.nopeCard]}
+    <Animated.View
+      {...panHandlers}
+      style={[
+        styles.card,
+        { height },
+        { transform: [{ translateX: pan.x }, { translateY: pan.y }, { rotate }] },
+      ]}
     >
-      <Image source={{ uri: person.image }} style={styles.cardImage} contentFit="cover" />
-      <View style={styles.distanceBadge}>
-        <Ionicons name="location-outline" size={14} color="#FFFFFF" />
-        <Text style={styles.distanceText}>{person.distance}</Text>
-      </View>
+      {photoUrl ? (
+        <Image source={{ uri: photoUrl }} style={styles.cardImage} contentFit="cover" />
+      ) : null}
+      {user.distanceKm ? (
+        <View style={styles.distanceBadge}>
+          <Ionicons name="location-outline" size={14} color="#FFFFFF" />
+          <Text style={styles.distanceText}>{user.distanceKm}</Text>
+        </View>
+      ) : null}
       <View style={styles.sideGrip}>
         {Array.from({ length: 6 }, (_, index) => (
           <View key={index} style={styles.gripDot} />
         ))}
       </View>
       <LinearGradient colors={['transparent', 'rgba(0,0,0,0.82)']} style={styles.cardGradient}>
-        <Text style={styles.cardName}>
-          {person.name}, {person.age}
-        </Text>
-        <Text style={styles.cardRole}>{person.role}</Text>
+        <Text style={styles.cardName}>{user.name}, {user.age}</Text>
+        <Text style={styles.cardRole}>{user.profile?.jobTitle ?? user.city ?? ''}</Text>
       </LinearGradient>
-      {mode !== 'idle' ? (
-        <View style={styles.feedback}>
-          <Ionicons
-            name={mode === 'like' ? 'heart' : 'close'}
-            size={42}
-            color={mode === 'like' ? colors.primary : colors.orange}
-          />
-        </View>
-      ) : null}
-    </Pressable>
+      <Animated.View style={[styles.feedbackLike, { opacity: likeOpacity }]}>
+        <Ionicons name="heart" size={42} color={colors.primary} />
+      </Animated.View>
+      <Animated.View style={[styles.feedbackNope, { opacity: nopeOpacity }]}>
+        <Ionicons name="close" size={42} color={colors.orange} />
+      </Animated.View>
+    </Animated.View>
   );
 }
 
@@ -110,12 +134,32 @@ export function FilterSheet({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function MatchOverlay({ onKeepSwiping }: { onKeepSwiping: () => void }) {
+export function MatchOverlay({
+  matchedUser,
+  myPhotoUrl,
+  onKeepSwiping,
+  onSayHello,
+}: {
+  matchedUser: DiscoveryUser;
+  myPhotoUrl: string | null;
+  onKeepSwiping: () => void;
+  onSayHello: () => void;
+}) {
+  const matchedPhoto = (matchedUser.photos.find(p => p.isPrimary) ?? matchedUser.photos[0])?.url ?? '';
+
   return (
     <View style={styles.matchOverlay}>
       <View style={styles.matchPhotos}>
-        <Image source={{ uri: photos.man }} style={[styles.matchPhoto, styles.matchPhotoBack]} />
-        <Image source={{ uri: photos.beach }} style={[styles.matchPhoto, styles.matchPhotoFront]} />
+        <Image
+          source={{ uri: myPhotoUrl ?? matchedPhoto }}
+          style={[styles.matchPhoto, styles.matchPhotoBack]}
+          contentFit="cover"
+        />
+        <Image
+          source={{ uri: matchedPhoto }}
+          style={[styles.matchPhoto, styles.matchPhotoFront]}
+          contentFit="cover"
+        />
         <View style={[styles.matchHeart, styles.matchHeartTop]}>
           <Ionicons name="heart" size={28} color={colors.primary} />
         </View>
@@ -123,10 +167,10 @@ export function MatchOverlay({ onKeepSwiping }: { onKeepSwiping: () => void }) {
           <Ionicons name="heart" size={24} color={colors.primary} />
         </View>
       </View>
-      <Text style={styles.matchTitle}>It’s a match, Jake!</Text>
-      <Text style={styles.matchCopy}>Start a conversation now with each other</Text>
+      <Text style={styles.matchTitle}>It's a match!</Text>
+      <Text style={styles.matchCopy}>You and {matchedUser.name} liked each other</Text>
       <View style={styles.matchActions}>
-        <PrimaryButton>Say hello</PrimaryButton>
+        <PrimaryButton onPress={onSayHello}>Say hello</PrimaryButton>
         <PrimaryButton variant="soft" onPress={onKeepSwiping}>
           Keep swiping
         </PrimaryButton>
@@ -155,8 +199,6 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 12 },
   },
-  likeCard: { transform: [{ rotate: '13deg' }, { translateX: 34 }] },
-  nopeCard: { transform: [{ rotate: '-13deg' }, { translateX: -34 }] },
   cardImage: { ...StyleSheet.absoluteFillObject },
   distanceBadge: {
     position: 'absolute',
@@ -196,18 +238,27 @@ const styles = StyleSheet.create({
   },
   cardName: { color: '#FFFFFF', fontSize: 25, fontWeight: '900' },
   cardRole: { color: '#FFFFFF', fontSize: 14, marginTop: 4 },
-  feedback: {
+  feedbackLike: {
     position: 'absolute',
-    width: 92,
-    height: 92,
-    borderRadius: 46,
+    top: 28,
+    left: 18,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    left: '50%',
-    top: '45%',
-    marginLeft: -46,
-    marginTop: -46,
+  },
+  feedbackNope: {
+    position: 'absolute',
+    top: 28,
+    right: 18,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   actionRow: {
     flexDirection: 'row',

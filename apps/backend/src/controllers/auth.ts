@@ -32,15 +32,20 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { supabaseAuthId: authUser.id },
-      include: { profile: true },
-    });
+    const existingUser =
+      (await prisma.user.findUnique({
+        where: { supabaseAuthId: authUser.id },
+        include: { profile: true },
+      })) ??
+      (await prisma.user.findUnique({
+        where: { email: authUser.email },
+        include: { profile: true },
+      }));
 
     if (existingUser) {
       const user = await prisma.user.update({
-        where: { supabaseAuthId: authUser.id },
-        data: { email: authUser.email },
+        where: { id: existingUser.id },
+        data: { supabaseAuthId: authUser.id, email: authUser.email },
         include: { profile: true },
       });
 

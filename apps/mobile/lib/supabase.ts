@@ -11,7 +11,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-const SecureStoreAdapter = Platform.OS === 'web'
+const isWeb = typeof localStorage !== 'undefined';
+
+const SecureStoreAdapter = isWeb
   ? {
       getItem: (key: string) => Promise.resolve(localStorage.getItem(key)),
       setItem: (key: string, value: string) => Promise.resolve(localStorage.setItem(key, value)),
@@ -28,6 +30,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storage: SecureStoreAdapter,
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: false,
+    detectSessionInUrl: isWeb,
   },
 });

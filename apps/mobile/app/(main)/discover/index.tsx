@@ -1,51 +1,182 @@
-import { useState } from 'react';
-import { SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
-import {
-  DiscoverCard,
-  FilterSheet,
-  MatchOverlay,
-  SwipeActions,
-} from '@/components/discover';
-import { colors, IconButton, people, ScreenTitle } from '@/design/system';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
+import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
+import { colors, IconButton, ScreenTitle } from '@/design/system';
+import { createSwipe, getDiscoveryFeed, getMyPhotos, type DiscoveryUser } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
-type SwipeMode = 'idle' | 'like' | 'nope';
+const SWIPE_THRESHOLD = 100;
 
 export default function SwipeScreen() {
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [mode, setMode] = useState<SwipeMode>('idle');
+  const [users, setUsers] = useState<DiscoveryUser[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [matchedUser, setMatchedUser] = useState<DiscoveryUser | null>(null);
+  const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [matched, setMatched] = useState(false);
   const { height } = useWindowDimensions();
-  const person = people[activeIndex % people.length];
   const cardHeight = Math.min(height * 0.54, 440);
 
-  const moveCard = (nextMode: Exclude<SwipeMode, 'idle'>) => {
-    setMode(nextMode);
-    if (nextMode === 'like' && activeIndex === 0) setMatched(true);
+  const pan = useRef(new Animated.ValueXY()).current;
+  const swipingRef = useRef(false);
+  const currentUserRef = useRef<DiscoveryUser | null>(null);
+  const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
 
-    setTimeout(() => {
-      setActiveIndex((value) => value + 1);
-      setMode('idle');
-    }, 420);
-  };
+  const currentUser = users[currentIndex] ?? null;
+  currentUserRef.current = currentUser;
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      async function load() {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        setLoading(true);
+        try {
+          const [{ users: feed }, myPhotos] = await Promise.all([
+            getDiscoveryFeed(session.access_token),
+            getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
+          ]);
+          if (!cancelled) {
+            setUsers(feed);
+            setCurrentIndex(0);
+            pan.setValue({ x: 0, y: 0 });
+            const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+            setMyPhotoUrl(primary?.url ?? null);
+          }
+        } catch {
+          // keep existing state on error
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      }
+
+      load();
+      return () => { cancelled = true; };
+    }, [pan])
+  );
+
+  const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
+    const user = currentUserRef.current;
+    swipingRef.current = false;
+    pan.setValue({ x: 0, y: 0 });
+    setCurrentIndex(prev => prev + 1);
+
+    if (!user) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    try {
+      const { match } = await createSwipe(
+        session.access_token,
+        user.id,
+        direction === 'like' ? 'LIKE' : 'DISLIKE',
+      );
+      if (match) setMatchedUser(user);
+    } catch {
+      // non-blocking — card already advanced
+    }
+  }, [pan]);
+
+  handleSwipeRef.current = handleSwipe;
+
+  const animateSwipe = useCallback((direction: 'like' | 'nope') => {
+    if (swipingRef.current || !currentUserRef.current) return;
+    swipingRef.current = true;
+    const toX = direction === 'like' ? 500 : -500;
+    Animated.timing(pan, {
+      toValue: { x: toX, y: 0 },
+      duration: 280,
+      useNativeDriver: false,
+    }).start(() => handleSwipeRef.current(direction));
+  }, [pan]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 6,
+      onPanResponderMove: Animated.event(
+        [null, { dx: pan.x, dy: pan.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: (_, gesture) => {
+        if (Math.abs(gesture.dx) < 8 && Math.abs(gesture.dy) < 8) {
+          if (currentUserRef.current) {
+            router.push({
+              pathname: '/(main)/discover/[userId]',
+              params: { userId: currentUserRef.current.id },
+            });
+          }
+          Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+          return;
+        }
+        if (!swipingRef.current && (gesture.dx > SWIPE_THRESHOLD || gesture.vx > 0.8)) {
+          swipingRef.current = true;
+          Animated.timing(pan, { toValue: { x: 500, y: gesture.dy }, duration: 280, useNativeDriver: false })
+            .start(() => handleSwipeRef.current('like'));
+        } else if (!swipingRef.current && (gesture.dx < -SWIPE_THRESHOLD || gesture.vx < -0.8)) {
+          swipingRef.current = true;
+          Animated.timing(pan, { toValue: { x: -500, y: gesture.dy }, duration: 280, useNativeDriver: false })
+            .start(() => handleSwipeRef.current('nope'));
+        } else {
+          Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+        }
+      },
+    })
+  ).current;
 
   return (
     <SafeAreaView style={styles.screen}>
       <ScreenTitle
         title="Discover"
-        subtitle="Chicago, Il"
+        subtitle={currentUser?.city ?? ''}
         right={<IconButton icon="options-outline" onPress={() => setFilterOpen(true)} />}
       />
 
       <View style={[styles.deck, { height: cardHeight + 38 }]}>
-        <View style={[styles.backCard, { height: cardHeight + 10 }]} />
-        <DiscoverCard person={person} height={cardHeight} mode={mode} />
+        {!loading && !currentUser ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>You're all caught up</Text>
+            <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
+          </View>
+        ) : (
+          <>
+            {users[currentIndex + 1] ? (
+              <View style={[styles.backCard, { height: cardHeight + 10 }]} />
+            ) : null}
+            {currentUser ? (
+              <DiscoverCard
+                key={currentUser.id}
+                user={currentUser}
+                height={cardHeight}
+                pan={pan}
+                panHandlers={panResponder.panHandlers}
+              />
+            ) : null}
+          </>
+        )}
       </View>
 
-      <SwipeActions onNope={() => moveCard('nope')} onLike={() => moveCard('like')} />
+      <SwipeActions
+        onNope={() => animateSwipe('nope')}
+        onLike={() => animateSwipe('like')}
+      />
 
       {filterOpen ? <FilterSheet onClose={() => setFilterOpen(false)} /> : null}
-      {matched ? <MatchOverlay onKeepSwiping={() => setMatched(false)} /> : null}
+
+      {matchedUser ? (
+        <MatchOverlay
+          matchedUser={matchedUser}
+          myPhotoUrl={myPhotoUrl}
+          onKeepSwiping={() => setMatchedUser(null)}
+          onSayHello={() => {
+            setMatchedUser(null);
+            router.push('/(main)/chats');
+          }}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -66,5 +197,22 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#D7E5F2',
     top: 6,
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    gap: 10,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  emptySubtext: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
   },
 });
