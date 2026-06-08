@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@/contexts/auth';
 import { colors, PrimaryButton } from '@/design/system';
-import { updateMyProfileData, type RelationshipGoal } from '@/lib/api';
+import { updateMyProfileData, uploadPhoto, type RelationshipGoal } from '@/lib/api';
 import { searchCities, type CitySuggestion } from '@/lib/places';
 
 type ProfileForm = {
@@ -66,10 +66,10 @@ export default function CompleteProfileScreen() {
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
   const [citySearchLoading, setCitySearchLoading] = useState(false);
   const [citySearchError, setCitySearchError] = useState<string | null>(null);
-  const [photos, setPhotos] = useState<Array<string | null>>([null, null, null, null, null, null]);
+  const [photos, setPhotos] = useState<Array<{ uri: string; mimeType: string } | null>>([null, null, null, null, null, null]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const uploadedPhotoCount = photos.filter(Boolean).length;
+  const selectedPhotoCount = photos.filter(Boolean).length;
   const detailFields = useMemo(() => requiredFields.filter((field) => field.key !== 'city'), []);
 
   const updateField = (key: keyof ProfileForm, value: string) => {
@@ -152,9 +152,12 @@ export default function CompleteProfileScreen() {
 
     if (result.canceled) return;
 
+    const asset = result.assets[0];
+    if (!asset) return;
+
     setPhotos((current) => {
       const next = [...current];
-      next[index] = result.assets[0]?.uri ?? null;
+      next[index] = { uri: asset.uri, mimeType: asset.mimeType ?? 'image/jpeg' };
       return next;
     });
   };
@@ -197,9 +200,6 @@ export default function CompleteProfileScreen() {
       return;
     }
 
-    // #cici attention: photo upload is intentionally skipped for now.
-    // Later this should require/upload photos through POST /api/v1/photos.
-
     setSaving(true);
 
     try {
@@ -214,6 +214,16 @@ export default function CompleteProfileScreen() {
         prompt1: form.prompt1,
         prompt2: form.prompt2,
       });
+
+      const selectedPhotos = photos.filter(Boolean) as Array<{ uri: string; mimeType: string }>;
+      for (const photo of selectedPhotos) {
+        try {
+          await uploadPhoto(accessToken, photo.uri, photo.mimeType);
+        } catch {
+          // Don't block profile completion on photo upload failures
+        }
+      }
+
       const complete = await markProfileComplete();
 
       if (!complete) {
@@ -254,7 +264,9 @@ export default function CompleteProfileScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Photos</Text>
-              <Text style={styles.counter}>Skipped for now</Text>
+              <Text style={styles.counter}>
+                {selectedPhotoCount > 0 ? `${selectedPhotoCount} selected` : 'Optional'}
+              </Text>
             </View>
             <View style={styles.photoGrid}>
               {photos.map((photo, index) => (
@@ -264,7 +276,7 @@ export default function CompleteProfileScreen() {
                   style={[styles.photoSlot, index === 0 && styles.primaryPhoto]}
                 >
                   {photo ? (
-                    <Image source={{ uri: photo }} style={styles.photo} contentFit="cover" />
+                    <Image source={{ uri: photo.uri }} style={styles.photo} contentFit="cover" />
                   ) : (
                     <View style={styles.emptyPhoto}>
                       <Ionicons name="camera-outline" size={25} color={colors.primary} />

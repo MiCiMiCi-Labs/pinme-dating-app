@@ -88,35 +88,10 @@ export async function syncAuthUser(accessToken: string, body?: SyncUserInput) {
 
 // ─── User & Profile ────────────────────────────────────────────────────────
 
-export type AppProfile = {
-  id: string;
-  height: number | null;
-  education: string | null;
-  jobTitle: string | null;
-  company: string | null;
-  relationshipGoal: string | null;
-  drinking: string | null;
-  smoking: string | null;
-  mbti: string | null;
-  constellation: string | null;
-  prompt1: string | null;
-  prompt2: string | null;
-};
-
-export type AppUser = {
-  id: string;
-  name: string;
-  email: string;
-  gender: string;
-  birthday: string;
-  profile: AppProfile | null;
-};
-
 export async function getCurrentAppUser(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
     headers: authHeaders(accessToken),
   });
-
   return parseResponse<{ user: AppUser }>(response);
 }
 
@@ -124,7 +99,6 @@ export async function getMyProfile(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/profiles/me`, {
     headers: authHeaders(accessToken),
   });
-
   return parseResponse<{ user: Omit<AppUser, 'profile'>; profile: AppProfile | null }>(response);
 }
 
@@ -137,12 +111,83 @@ export async function updateMyProfileData(accessToken: string, data: ProfileUpda
     },
     body: JSON.stringify(data),
   });
-  return parseResponse<{ message: string; profile: AppProfile }>(response);
+  return parseResponse<{ message: string; user: Omit<AppUser, 'profile'>; profile: AppProfile }>(response);
 }
 
 // ─── Photos ────────────────────────────────────────────────────────────────
 
-  return parseResponse<{ message: string; user: Omit<AppUser, 'profile'>; profile: AppProfile }>(
-    response
-  );
+export type Photo = {
+  id: string;
+  url: string;
+  isPrimary: boolean;
+  orderIndex: number;
+};
+
+export async function getMyPhotos(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/photos/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<Photo[]>(response);
+}
+
+export async function uploadPhoto(accessToken: string, uri: string, mimeType: string) {
+  const ext = mimeType.split('/')[1] ?? 'jpg';
+  const formData = new FormData();
+  formData.append('photo', { uri, name: `photo.${ext}`, type: mimeType } as unknown as Blob);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/photos`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: formData,
+  });
+  return parseResponse<Photo>(response);
+}
+
+export async function setPrimaryPhoto(accessToken: string, photoId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/photos/${photoId}/primary`, {
+    method: 'PATCH',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<Photo>(response);
+}
+
+export async function deletePhoto(accessToken: string, photoId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/photos/${photoId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  if (response.status === 204) return;
+  return parseResponse<void>(response);
+}
+
+// ─── Discovery ─────────────────────────────────────────────────────────────
+
+export type DiscoveryUser = {
+  id: string;
+  name: string;
+  age: number;
+  bio: string | null;
+  city: string | null;
+  distanceKm: string | null;
+  gender: string;
+  profile: AppProfile | null;
+  photos: Photo[];
+};
+
+export async function getDiscoveryFeed(accessToken: string, limit = 20) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/discovery?limit=${limit}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ users: DiscoveryUser[] }>(response);
+}
+
+export type SwipeAction = 'LIKE' | 'DISLIKE' | 'SUPER_LIKE';
+
+export async function createSwipe(accessToken: string, targetId: string, action: SwipeAction) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/swipes`, {
+    method: 'POST',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetId, action }),
+  });
+  return parseResponse<{ swipe: unknown; match: { id: string } | null }>(response);
 }

@@ -3,9 +3,9 @@ import { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EditableField, EditableTextArea, FormSection, PhotoUploadGrid } from '@/components/form';
 import { colors, IconButton, PrimaryButton } from '@/design/system';
-import { photos } from '@/design/system';
 import {
   getCurrentAppUser,
+  getMyPhotos,
   updateMyProfileData,
   type AppUser,
   type RelationshipGoal,
@@ -74,6 +74,7 @@ function draftFromUser(user: AppUser): ProfileDraft {
 export default function MyProfileScreen() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft);
+  const [photoSlots, setPhotoSlots] = useState<Array<string | null>>(Array(6).fill(null));
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -90,11 +91,17 @@ export default function MyProfileScreen() {
 
         try {
           setLoading(true);
-          const { user: appUser } = await getCurrentAppUser(session.access_token);
+          const [{ user: appUser }, photos] = await Promise.all([
+            getCurrentAppUser(session.access_token),
+            getMyPhotos(session.access_token),
+          ]);
 
           if (!cancelled) {
             setUser(appUser);
             setDraft(draftFromUser(appUser));
+            const slots: Array<string | null> = Array(6).fill(null);
+            photos.forEach((p, i) => { if (i < 6) slots[i] = p.url; });
+            setPhotoSlots(slots);
           }
         } catch (error) {
           if (!cancelled) {
@@ -212,8 +219,7 @@ export default function MyProfileScreen() {
           <IconButton icon="settings-outline" />
         </View>
 
-        {/* #cici attention: photo upload/edit is intentionally disabled in this pass. */}
-        <PhotoUploadGrid photos={[photos.portrait, null, null, null, null, null]} />
+        <PhotoUploadGrid photos={photoSlots} />
 
         <FormSection title="Account">
           <EditableField label="Name" value={user?.name ?? ''} />
