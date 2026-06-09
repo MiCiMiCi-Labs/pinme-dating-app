@@ -46,8 +46,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       if (error) {
         supabase.auth.signOut();
+        setProfileCompletionLoading(false);
         setSession(null);
       } else {
+        setProfileCompletionLoading(Boolean(session));
         setSession(session);
       }
       setLoading(false);
@@ -56,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      setProfileCompletionLoading(Boolean(session));
       setSession(session);
     });
 
