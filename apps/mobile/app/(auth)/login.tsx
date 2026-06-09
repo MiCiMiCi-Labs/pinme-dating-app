@@ -72,7 +72,6 @@ export default function LoginScreen() {
       }
 
       await syncAuthUser(data.session.access_token);
-      router.replace('/(auth)/complete-profile');
     } catch (err) {
       setError(getLoginErrorMessage(err));
     } finally {

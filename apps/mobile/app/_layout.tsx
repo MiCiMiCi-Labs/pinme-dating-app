@@ -21,12 +21,24 @@ function RootNavigator() {
     const inAuth = segments[0] === '(auth)';
     const inCompleteProfile = inAuth && segments[1] === 'complete-profile';
 
-    if (session && !profileComplete && inMain) {
-      router.replace('/(auth)/complete-profile');
-    } else if (session && profileComplete && !inMain && !inAuth) {
+    if (!session) {
+      if (inMain) {
+        router.replace('/');
+      } else if (inCompleteProfile) {
+        router.replace('/(auth)/login');
+      }
+      return;
+    }
+
+    if (!profileComplete) {
+      if (!inCompleteProfile) {
+        router.replace('/(auth)/complete-profile');
+      }
+      return;
+    }
+
+    if (!inMain) {
       router.replace('/(main)/discover');
-    } else if (!session && inMain) {
-      router.replace('/');
     }
   }, [session, loading, profileComplete, profileCompletionLoading, segments]);
 
