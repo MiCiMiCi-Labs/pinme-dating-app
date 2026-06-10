@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { MessageType } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 const VALID_ACTIONS = ['LIKE', 'DISLIKE', 'SUPER_LIKE'] as const;
@@ -69,8 +70,22 @@ export async function createSwipe(req: Request, res: Response) {
           ? [swiperId, targetId]
           : [targetId, swiperId];
 
-        match = await prisma.match.create({
-          data: { user1Id, user2Id },
+        match = await prisma.$transaction(async (tx) => {
+          const createdMatch = await tx.match.create({
+            data: { user1Id, user2Id },
+          });
+
+          await tx.message.create({
+            data: {
+              matchId: createdMatch.id,
+              senderId: null,
+              content: "Match successful, let's chat!",
+              messageType: MessageType.SYSTEM,
+              isRead: true,
+            },
+          });
+
+          return createdMatch;
         });
       }
     }

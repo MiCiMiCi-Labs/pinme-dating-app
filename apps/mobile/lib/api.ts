@@ -60,6 +60,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
     const message =
       data && typeof data === 'object' && 'message' in data
         ? String(data.message)
+        : data && typeof data === 'object' && 'error' in data
+          ? String(data.error)
         : 'Request failed';
     throw new Error(message);
   }
@@ -190,4 +192,70 @@ export async function createSwipe(accessToken: string, targetId: string, action:
     body: JSON.stringify({ targetId, action }),
   });
   return parseResponse<{ swipe: unknown; match: { id: string } | null }>(response);
+}
+
+// ─── Chat ────────────────────────────────────────────────────────────────────
+
+export type ChatMessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM';
+
+export type ChatMessage = {
+  id: string;
+  matchId: string;
+  senderId: string | null;
+  content: string;
+  messageType: ChatMessageType;
+  isRead: boolean;
+  createdAt: string;
+  sender: {
+    id: string;
+    name: string;
+  } | null;
+};
+
+export type ChatMatch = {
+  matchId: string;
+  createdAt: string;
+  lastMessage: ChatMessage | null;
+  unreadCount: number;
+  user: {
+    id: string;
+    name: string;
+    age: number;
+    gender: string;
+    bio: string | null;
+    city: string | null;
+    profile: AppProfile | null;
+    photos: Photo[];
+  };
+};
+
+export async function getMatches(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<ChatMatch[]>(response);
+}
+
+export async function getMessages(accessToken: string, matchId: string, limit = 50) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}?limit=${limit}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ messages: ChatMessage[] }>(response);
+}
+
+export async function sendMessage(accessToken: string, matchId: string, content: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}`, {
+    method: 'POST',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, messageType: 'TEXT' }),
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function markMessagesRead(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/read`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ updatedCount: number }>(response);
 }

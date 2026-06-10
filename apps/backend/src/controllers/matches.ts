@@ -50,19 +50,41 @@ export async function getMatches(req: Request, res: Response) {
       include: {
         user1: otherUserInclude,
         user2: otherUserInclude,
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            sender: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    const result = matches.map((match) => {
+    const result = await Promise.all(matches.map(async (match) => {
       const other = match.user1Id === dbUserId ? match.user2 : match.user1;
       const { birthday, ...otherFields } = other;
+      const unreadCount = await prisma.message.count({
+        where: {
+          matchId: match.id,
+          senderId: { not: dbUserId },
+          isRead: false,
+        },
+      });
+
       return {
         matchId: match.id,
         createdAt: match.createdAt,
+        lastMessage: match.messages[0] ?? null,
+        unreadCount,
         user: { ...otherFields, age: calculateAge(birthday) },
       };
-    });
+    }));
 
     res.json(result);
   } catch {

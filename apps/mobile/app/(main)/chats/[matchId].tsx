@@ -1,64 +1,209 @@
-import { router, useLocalSearchParams } from 'expo-router';
-import { KeyboardAvoidingView, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, IconButton, people, ProfileThumb } from '@/design/system';
-import { demoThread } from '@/data/mock';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
+import {
+  getCurrentAppUser,
+  getMessages,
+  markMessagesRead,
+  sendMessage,
+  type ChatMessage,
+} from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+
+function formatMessageTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 export default function ChatRoomScreen() {
-  const { matchId } = useLocalSearchParams<{ matchId: string }>();
+  const params = useLocalSearchParams<{
+    matchId?: string;
+    name?: string;
+    photoUrl?: string;
+  }>();
+  const matchId = firstParam(params.matchId);
+  const name = firstParam(params.name) ?? 'Chat';
+  const photoUrl = firstParam(params.photoUrl) ?? photos.redhead;
+
+  const scrollRef = useRef<ScrollView>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadThread = useCallback(async () => {
+    if (!matchId) {
+      setError('Missing match id');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const [{ user }, { messages: loadedMessages }] = await Promise.all([
+        getCurrentAppUser(session.access_token),
+        getMessages(session.access_token, matchId),
+      ]);
+
+      setCurrentUserId(user.id);
+      setMessages(loadedMessages);
+      await markMessagesRead(session.access_token, matchId).catch(() => null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load messages');
+    } finally {
+      setLoading(false);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+    }
+  }, [matchId]);
+
+  useEffect(() => {
+    loadThread();
+  }, [loadThread]);
+
+  const handleSend = async () => {
+    const content = draft.trim();
+    if (!content || !matchId || sending) return;
+
+    setDraft('');
+    setSending(true);
+    setError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+
+      const { message } = await sendMessage(session.access_token, matchId, content);
+      setMessages(current => [...current, message]);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    } catch (err) {
+      setDraft(content);
+      setError(err instanceof Error ? err.message : 'Failed to send message');
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.screen}>
       <KeyboardAvoidingView
         style={styles.keyboard}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         <View style={styles.header}>
           <IconButton icon="chevron-back" onPress={() => router.replace('/(main)/chats')} />
           <View style={styles.personRow}>
-            <ProfileThumb uri={people[3].image} size={54} />
+            <ProfileThumb uri={photoUrl} size={54} />
             <View>
-              <Text style={styles.title}>Grace</Text>
+              <Text style={styles.title} numberOfLines={1}>{name}</Text>
               <View style={styles.onlineRow}>
                 <View style={styles.onlineDot} />
-                <Text style={styles.online}>Online</Text>
+                <Text style={styles.online}>Matched</Text>
               </View>
             </View>
           </View>
-          <IconButton icon="ellipsis-vertical" />
+          <IconButton icon="refresh-outline" onPress={loadThread} />
         </View>
 
         <View style={styles.dayRow}>
           <View style={styles.dayLine} />
-          <Text style={styles.dayText}>Today</Text>
+          <Text style={styles.dayText}>Messages</Text>
           <View style={styles.dayLine} />
         </View>
 
-        <View style={styles.thread}>
-          {demoThread.map((message) => (
-            <View key={message.id} style={[styles.messageBlock, message.mine && styles.messageMine]}>
-              <View style={[styles.bubble, message.mine ? styles.bubbleMine : styles.bubbleOther]}>
-                <Text style={styles.bubbleText}>{message.body}</Text>
+        {loading ? (
+          <View style={styles.centerState}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        ) : (
+          <ScrollView
+            ref={scrollRef}
+            style={styles.thread}
+            contentContainerStyle={messages.length ? styles.threadContent : styles.emptyThread}
+            showsVerticalScrollIndicator={false}
+            onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
+          >
+            {messages.length ? (
+              messages.map(message => {
+                if (message.messageType === 'SYSTEM') {
+                  return (
+                    <View key={message.id} style={styles.systemMessage}>
+                      <Text style={styles.systemMessageText}>{message.content}</Text>
+                    </View>
+                  );
+                }
+
+                const mine = message.senderId === currentUserId;
+                return (
+                  <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                    <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
+                      <Text style={styles.bubbleText}>{message.content}</Text>
+                    </View>
+                    <Text style={[styles.messageTime, mine && styles.timeMine]}>
+                      {formatMessageTime(message.createdAt)}
+                      {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
+                    </Text>
+                  </View>
+                );
+              })
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No messages yet</Text>
+                <Text style={styles.emptyCopy}>Send the first message to start the conversation.</Text>
               </View>
-              <Text style={[styles.messageTime, message.mine && styles.timeMine]}>
-                {message.time}
-                {message.mine ? '  ✓✓' : ''}
-              </Text>
-            </View>
-          ))}
-        </View>
+            )}
+          </ScrollView>
+        )}
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.inputRow}>
           <View style={styles.messageInput}>
             <TextInput
-              placeholder={`Your message${matchId ? '' : ''}`}
+              value={draft}
+              onChangeText={setDraft}
+              placeholder="Your message"
               placeholderTextColor={colors.grayIcon}
               style={styles.input}
+              multiline
             />
-            <Ionicons name="pie-chart-outline" size={22} color={colors.grayIcon} />
           </View>
-          <Pressable style={styles.mic}>
-            <Ionicons name="mic" size={23} color={colors.primary} />
+          <Pressable
+            style={[styles.sendButton, (!draft.trim() || sending) && styles.sendDisabled]}
+            onPress={handleSend}
+            disabled={!draft.trim() || sending}
+          >
+            {sending ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Ionicons name="send" size={22} color="#FFFFFF" />
+            )}
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -92,6 +237,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 25,
     fontWeight: '900',
+    maxWidth: 150,
   },
   onlineRow: {
     flexDirection: 'row',
@@ -123,10 +269,54 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
   },
+  centerState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   thread: {
     flex: 1,
+    marginTop: 6,
+  },
+  threadContent: {
     paddingTop: 20,
+    paddingBottom: 16,
     gap: 16,
+  },
+  emptyThread: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingHorizontal: 28,
+    gap: 8,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  emptyCopy: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  systemMessage: {
+    alignSelf: 'center',
+    maxWidth: '86%',
+    borderRadius: 999,
+    backgroundColor: colors.soft,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  systemMessageText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   messageBlock: {
     alignSelf: 'flex-start',
@@ -159,34 +349,43 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     color: colors.primary,
   },
+  errorText: {
+    color: colors.primary,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
   inputRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     gap: 12,
     paddingBottom: 28,
   },
   messageInput: {
     flex: 1,
-    height: 52,
+    minHeight: 52,
+    maxHeight: 110,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.line,
-    flexDirection: 'row',
-    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   input: {
-    flex: 1,
     color: colors.text,
     fontSize: 14,
+    lineHeight: 20,
   },
-  mic: {
+  sendButton: {
     width: 54,
     height: 54,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.line,
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  sendDisabled: {
+    opacity: 0.45,
   },
 });

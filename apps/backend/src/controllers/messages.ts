@@ -6,7 +6,7 @@ import { prisma } from '../lib/prisma';
 const sendMessageSchema = z
   .object({
     content: z.string().trim().min(1).max(5000),
-    messageType: z.nativeEnum(MessageType).default(MessageType.TEXT),
+    messageType: z.enum([MessageType.TEXT, MessageType.IMAGE, MessageType.GIF]).default(MessageType.TEXT),
   })
   .strict();
 
