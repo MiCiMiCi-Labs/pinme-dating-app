@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { ChatPreviewRow } from '@/components/cards';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
-import { getMatches, type ChatMatch } from '@/lib/api';
+import { getChatMatches, type ChatMatch } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
 function getPrimaryPhoto(match: ChatMatch) {
@@ -59,7 +59,7 @@ export default function ChatListScreen() {
         return;
       }
 
-      const data = await getMatches(session.access_token);
+      const data = await getChatMatches(session.access_token);
       setMatches(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load chats');
