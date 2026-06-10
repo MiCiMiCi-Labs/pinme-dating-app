@@ -9,6 +9,7 @@ export function ChatPreviewRow({
   unread,
   image,
   showDivider,
+  onPress,
 }: {
   name: string;
   text: string;
@@ -16,9 +17,10 @@ export function ChatPreviewRow({
   unread: number;
   image: string;
   showDivider?: boolean;
+  onPress?: () => void;
 }) {
   return (
-    <Pressable style={styles.chatRow} onPress={() => router.push('/(main)/chats/demo-match')}>
+    <Pressable style={styles.chatRow} onPress={onPress ?? (() => router.push('/(main)/chats/demo-match'))}>
       <ProfileThumb uri={image} size={58} />
       <View style={styles.chatBody}>
         <Text style={styles.chatName}>{name}</Text>

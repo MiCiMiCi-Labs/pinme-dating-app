@@ -13,6 +13,7 @@ export default function SwipeScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [matchedUser, setMatchedUser] = useState<DiscoveryUser | null>(null);
+  const [matchedMatchId, setMatchedMatchId] = useState<string | null>(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const { height } = useWindowDimensions();
@@ -74,7 +75,10 @@ export default function SwipeScreen() {
         user.id,
         direction === 'like' ? 'LIKE' : 'DISLIKE',
       );
-      if (match) setMatchedUser(user);
+      if (match) {
+        setMatchedUser(user);
+        setMatchedMatchId(match.id);
+      }
     } catch {
       // non-blocking — card already advanced
     }
@@ -170,10 +174,26 @@ export default function SwipeScreen() {
         <MatchOverlay
           matchedUser={matchedUser}
           myPhotoUrl={myPhotoUrl}
-          onKeepSwiping={() => setMatchedUser(null)}
-          onSayHello={() => {
+          onKeepSwiping={() => {
             setMatchedUser(null);
-            router.push('/(main)/chats');
+            setMatchedMatchId(null);
+          }}
+          onSayHello={() => {
+            const primaryPhoto = matchedUser.photos.find(photo => photo.isPrimary) ?? matchedUser.photos[0];
+            setMatchedUser(null);
+            if (matchedMatchId) {
+              router.push({
+                pathname: '/(main)/chats/[matchId]',
+                params: {
+                  matchId: matchedMatchId,
+                  name: matchedUser.name,
+                  photoUrl: primaryPhoto?.url ?? '',
+                },
+              });
+            } else {
+              router.push('/(main)/chats');
+            }
+            setMatchedMatchId(null);
           }}
         />
       ) : null}
