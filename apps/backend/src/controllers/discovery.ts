@@ -138,7 +138,8 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         const matchesMaxAge = !preferences?.maxAge || age <= preferences.maxAge;
         const matchesDistance =
           !preferences?.maxDistanceKm ||
-          (distanceKm !== null && distanceKm <= preferences.maxDistanceKm);
+          distanceKm === null ||
+          distanceKm <= preferences.maxDistanceKm;
 
         return matchesMinAge && matchesMaxAge && matchesDistance;
       })

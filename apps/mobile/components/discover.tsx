@@ -137,7 +137,7 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
           setPreferredGender(preferences.preferredGender);
           setMaxDistanceKm(preferences.maxDistanceKm ?? 50);
           setMinAge(preferences.minAge ?? 18);
-          setMaxAge(preferences.maxAge ?? 35);
+          setMaxAge(preferences.maxAge ?? 99);
         }
         setShowDistance(privacy.showDistance);
       } catch {}
@@ -173,7 +173,7 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         await Promise.all([
-          updateMyPreferences(session.access_token, { preferredGender, minAge, maxAge, maxDistanceKm }),
+          updateMyPreferences(session.access_token, { preferredGender, minAge, maxAge: maxAge === 99 ? null : maxAge, maxDistanceKm }),
           updatePrivacySettings(session.access_token, { showDistance }),
         ]);
         onApply?.();

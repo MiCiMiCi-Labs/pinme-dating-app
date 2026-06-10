@@ -13,6 +13,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 const isWeb = typeof localStorage !== 'undefined';
 
+const CHUNK_SIZE = 2000;
+
 const SecureStoreAdapter = isWeb
   ? {
       getItem: (key: string) => Promise.resolve(localStorage.getItem(key)),
@@ -20,9 +22,39 @@ const SecureStoreAdapter = isWeb
       removeItem: (key: string) => Promise.resolve(localStorage.removeItem(key)),
     }
   : {
-      getItem: (key: string) => SecureStore.getItemAsync(key),
-      setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
-      removeItem: (key: string) => SecureStore.deleteItemAsync(key),
+      getItem: async (key: string) => {
+        const countStr = await SecureStore.getItemAsync(`${key}_n`);
+        if (!countStr) return SecureStore.getItemAsync(key);
+        const count = parseInt(countStr, 10);
+        const chunks: string[] = [];
+        for (let i = 0; i < count; i++) {
+          const chunk = await SecureStore.getItemAsync(`${key}_${i}`);
+          if (chunk === null) return null;
+          chunks.push(chunk);
+        }
+        return chunks.join('');
+      },
+      setItem: async (key: string, value: string) => {
+        if (value.length <= CHUNK_SIZE) {
+          await SecureStore.setItemAsync(key, value);
+          return;
+        }
+        const count = Math.ceil(value.length / CHUNK_SIZE);
+        await SecureStore.setItemAsync(`${key}_n`, String(count));
+        for (let i = 0; i < count; i++) {
+          await SecureStore.setItemAsync(`${key}_${i}`, value.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
+        }
+      },
+      removeItem: async (key: string) => {
+        const countStr = await SecureStore.getItemAsync(`${key}_n`);
+        await SecureStore.deleteItemAsync(key);
+        if (!countStr) return;
+        const count = parseInt(countStr, 10);
+        await SecureStore.deleteItemAsync(`${key}_n`);
+        for (let i = 0; i < count; i++) {
+          await SecureStore.deleteItemAsync(`${key}_${i}`);
+        }
+      },
     };
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {

@@ -3,7 +3,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors, IconButton } from '@/design/system';
-import { getMatches, type ChatMatch } from '@/lib/api';
+import { getChatMatches, type ChatMatch } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
 export default function MatchesScreen() {
@@ -18,7 +18,7 @@ export default function MatchesScreen() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
         try {
-          const data = await getMatches(session.access_token);
+          const data = await getChatMatches(session.access_token);
           if (!cancelled) setMatches(data);
         } catch {
           // keep existing state
