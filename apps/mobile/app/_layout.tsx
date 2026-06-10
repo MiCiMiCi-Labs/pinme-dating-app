@@ -11,8 +11,8 @@ function RootNavigator() {
   const segments = useSegments();
 
   useEffect(() => {
-    if (!loading) SplashScreen.hideAsync();
-  }, [loading]);
+    if (!loading && !profileCompletionLoading) SplashScreen.hideAsync();
+  }, [loading, profileCompletionLoading]);
 
   useEffect(() => {
     if (loading || profileCompletionLoading) return;

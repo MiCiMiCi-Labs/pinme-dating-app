@@ -43,11 +43,18 @@ export async function syncCurrentUser(req: Request, res: Response) {
       }));
 
     if (existingUser) {
-      const user = await prisma.user.update({
-        where: { id: existingUser.id },
-        data: { supabaseAuthId: authUser.id, email: authUser.email },
-        include: { profile: true },
-      });
+      const [user] = await prisma.$transaction([
+        prisma.user.update({
+          where: { id: existingUser.id },
+          data: { supabaseAuthId: authUser.id, email: authUser.email },
+          include: { profile: true },
+        }),
+        prisma.privacySettings.upsert({
+          where: { userId: existingUser.id },
+          update: {},
+          create: { userId: existingUser.id, discoverable: true, showDistance: false, showOnlineStatus: false },
+        }),
+      ]);
 
       res.status(200).json({
         message: 'User synced successfully',
@@ -96,6 +103,9 @@ export async function syncCurrentUser(req: Request, res: Response) {
         name: name.trim(),
         gender: gender as Gender,
         birthday: parsedBirthday as Date,
+        privacySettings: {
+          create: { discoverable: true, showDistance: false, showOnlineStatus: false },
+        },
       },
       include: { profile: true },
     });

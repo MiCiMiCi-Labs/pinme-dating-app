@@ -84,9 +84,10 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
       id: { notIn: Array.from(excludedUserIds) },
       profile: { isNot: null },
       photos: { some: {} },
-      privacySettings: {
-        is: { discoverable: true },
-      },
+      OR: [
+        { privacySettings: { is: null } },
+        { privacySettings: { is: { discoverable: true } } },
+      ],
     };
 
     if (preferences?.preferredGender) {
