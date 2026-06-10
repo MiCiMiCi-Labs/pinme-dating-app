@@ -1,9 +1,12 @@
 import { Router } from 'express';
-
-// GET  /api/v1/users/me
-// PUT  /api/v1/users/me
-// GET  /api/v1/users/:id
+import { requireAuth } from '../middleware/auth';
+import { getUserById } from '../controllers/users';
 
 const router = Router();
+
+router.use(requireAuth);
+
+// GET /api/v1/users/:id
+router.get('/:id', getUserById);
 
 export default router;
