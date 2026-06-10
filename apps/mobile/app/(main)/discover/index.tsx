@@ -168,7 +168,16 @@ export default function SwipeScreen() {
         onLike={() => animateSwipe('like')}
       />
 
-      {filterOpen ? <FilterSheet onClose={() => setFilterOpen(false)} /> : null}
+      {filterOpen ? (
+        <FilterSheet
+          onClose={() => setFilterOpen(false)}
+          onApply={() => {
+            setUsers([]);
+            setCurrentIndex(0);
+            pan.setValue({ x: 0, y: 0 });
+          }}
+        />
+      ) : null}
 
       {matchedUser ? (
         <MatchOverlay
