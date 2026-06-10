@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, ScreenTitle } from '@/design/system';
@@ -16,6 +16,7 @@ export default function SwipeScreen() {
   const [matchedMatchId, setMatchedMatchId] = useState<string | null>(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [feedKey, setFeedKey] = useState(0);
   const { height } = useWindowDimensions();
   const cardHeight = Math.min(height * 0.54, 440);
 
@@ -27,37 +28,41 @@ export default function SwipeScreen() {
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
+  const loadFeed = useCallback(async (cancelled?: { current: boolean }) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    setLoading(true);
+    try {
+      const [{ users: feed }, myPhotos] = await Promise.all([
+        getDiscoveryFeed(session.access_token),
+        getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
+      ]);
+      if (!cancelled?.current) {
+        setUsers(feed);
+        setCurrentIndex(0);
+        pan.setValue({ x: 0, y: 0 });
+        const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+        setMyPhotoUrl(primary?.url ?? null);
+      }
+    } catch {
+      // keep existing state on error
+    } finally {
+      if (!cancelled?.current) setLoading(false);
+    }
+  }, [pan]);
+
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-
-      async function load() {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        setLoading(true);
-        try {
-          const [{ users: feed }, myPhotos] = await Promise.all([
-            getDiscoveryFeed(session.access_token),
-            getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
-          ]);
-          if (!cancelled) {
-            setUsers(feed);
-            setCurrentIndex(0);
-            pan.setValue({ x: 0, y: 0 });
-            const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-            setMyPhotoUrl(primary?.url ?? null);
-          }
-        } catch {
-          // keep existing state on error
-        } finally {
-          if (!cancelled) setLoading(false);
-        }
-      }
-
-      load();
-      return () => { cancelled = true; };
-    }, [pan])
+      const cancelled = { current: false };
+      loadFeed(cancelled);
+      return () => { cancelled.current = true; };
+    }, [loadFeed])
   );
+
+  useEffect(() => {
+    if (feedKey === 0) return;
+    loadFeed();
+  }, [feedKey, loadFeed]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -168,7 +173,12 @@ export default function SwipeScreen() {
         onLike={() => animateSwipe('like')}
       />
 
-      {filterOpen ? <FilterSheet onClose={() => setFilterOpen(false)} /> : null}
+      {filterOpen ? (
+        <FilterSheet
+          onClose={() => setFilterOpen(false)}
+          onApply={() => setFeedKey(k => k + 1)}
+        />
+      ) : null}
 
       {matchedUser ? (
         <MatchOverlay

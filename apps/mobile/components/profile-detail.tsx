@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, IconButton } from '@/design/system';
 import { type PublicUser } from '@/lib/api';
 
-export function ProfileDetailContent({ user }: { user: PublicUser | null }) {
+export function ProfileDetailContent({ user, onLike, liked }: { user: PublicUser | null; onLike?: () => void; liked?: boolean }) {
   const { height } = useWindowDimensions();
   const heroHeight = Math.min(height * 0.48, 390);
 
@@ -35,8 +35,8 @@ export function ProfileDetailContent({ user }: { user: PublicUser | null }) {
         <Pressable style={styles.bigAction} onPress={() => { /* TODO: navigate to chat */ }}>
           <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
         </Pressable>
-        <Pressable style={styles.smallAction}>
-          <Ionicons name="heart" size={28} color={colors.primary} />
+        <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
+          <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
         </Pressable>
       </View>
 
@@ -128,6 +128,9 @@ const styles = StyleSheet.create({
     shadowColor: '#000000',
     shadowOpacity: 0.08,
     shadowRadius: 18,
+  },
+  smallActionActive: {
+    backgroundColor: colors.primary,
   },
   bigAction: {
     width: 96,

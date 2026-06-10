@@ -116,6 +116,68 @@ export async function updateMyProfileData(accessToken: string, data: ProfileUpda
   return parseResponse<{ message: string; user: Omit<AppUser, 'profile'>; profile: AppProfile }>(response);
 }
 
+// ─── Preferences ───────────────────────────────────────────────────────────
+
+export type Preferences = {
+  preferredGender: 'MALE' | 'FEMALE' | 'NON_BINARY' | 'OTHER' | null;
+  minAge: number | null;
+  maxAge: number | null;
+  maxDistanceKm: number | null;
+  minHeight: number | null;
+  maxHeight: number | null;
+};
+
+export async function getMyPreferences(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/preferences/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ preferences: Preferences | null }>(response);
+}
+
+export async function updateMyPreferences(accessToken: string, data: Partial<Preferences>) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/preferences/me`, {
+    method: 'PUT',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return parseResponse<{ preferences: Preferences }>(response);
+}
+
+// ─── Location ──────────────────────────────────────────────────────────────
+
+export async function updateLocation(accessToken: string, latitude: number, longitude: number, city?: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/location`, {
+    method: 'PUT',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ latitude, longitude, city }),
+  });
+  return parseResponse<{ latitude: number; longitude: number; city: string | null }>(response);
+}
+
+// ─── Privacy ───────────────────────────────────────────────────────────────
+
+export type PrivacySettings = {
+  discoverable: boolean;
+  showDistance: boolean;
+  showOnlineStatus: boolean;
+};
+
+export async function getPrivacySettings(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/privacy/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<PrivacySettings>(response);
+}
+
+export async function updatePrivacySettings(accessToken: string, data: Partial<PrivacySettings>) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/privacy/me`, {
+    method: 'PUT',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return parseResponse<PrivacySettings>(response);
+}
+
 // ─── Photos ────────────────────────────────────────────────────────────────
 
 export type Photo = {
@@ -204,29 +266,6 @@ export async function getUserById(accessToken: string, userId: string) {
 }
 
 // ─── Matches ───────────────────────────────────────────────────────────────
-
-export type MatchUser = {
-  id: string;
-  name: string;
-  age: number;
-  bio: string | null;
-  city: string | null;
-  profile: AppProfile | null;
-  photos: Photo[];
-};
-
-export type Match = {
-  matchId: string;
-  createdAt: string;
-  user: MatchUser;
-};
-
-export async function getMatches(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
-    headers: authHeaders(accessToken),
-  });
-  return parseResponse<Match[]>(response);
-}
 
 // ─── Swipes ────────────────────────────────────────────────────────────────
 
