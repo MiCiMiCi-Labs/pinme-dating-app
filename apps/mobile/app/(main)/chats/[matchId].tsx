@@ -34,6 +34,48 @@ function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+type RealtimeMessageRow = {
+  id: string;
+  match_id: string;
+  sender_id: string | null;
+  content: string;
+  message_type: ChatMessage['messageType'];
+  is_read: boolean;
+  created_at: string;
+};
+
+function mapRealtimeMessage(row: RealtimeMessageRow): ChatMessage {
+  return {
+    id: row.id,
+    matchId: row.match_id,
+    senderId: row.sender_id,
+    content: row.content,
+    messageType: row.message_type,
+    isRead: row.is_read,
+    createdAt: row.created_at,
+    sender: null,
+  };
+}
+
+function mergeMessage(current: ChatMessage[], incoming: ChatMessage) {
+  const existingIndex = current.findIndex(message => message.id === incoming.id);
+
+  if (existingIndex === -1) {
+    return [...current, incoming].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+  }
+
+  const next = [...current];
+  const existing = next[existingIndex];
+  next[existingIndex] = {
+    ...existing,
+    ...incoming,
+    sender: incoming.sender ?? existing.sender,
+  };
+  return next;
+}
+
 export default function ChatRoomScreen() {
   const params = useLocalSearchParams<{
     matchId?: string;
@@ -86,6 +128,57 @@ export default function ChatRoomScreen() {
     loadThread();
   }, [loadThread]);
 
+  useEffect(() => {
+    if (!matchId) return;
+
+    const channel = supabase
+      .channel(`messages:${matchId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `match_id=eq.${matchId}`,
+        },
+        (payload) => {
+          const message = mapRealtimeMessage(payload.new as RealtimeMessageRow);
+          setMessages(current => mergeMessage(current, message));
+          requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
+          if (currentUserId && message.senderId && message.senderId !== currentUserId) {
+            supabase.auth.getSession().then(({ data: { session } }) => {
+              if (session?.access_token) {
+                markMessagesRead(session.access_token, matchId).catch(() => null);
+              }
+            });
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `match_id=eq.${matchId}`,
+        },
+        (payload) => {
+          const message = mapRealtimeMessage(payload.new as RealtimeMessageRow);
+          setMessages(current => mergeMessage(current, message));
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          setError('Realtime connection failed. Pull to refresh messages.');
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUserId, matchId]);
+
   const handleSend = async () => {
     const content = draft.trim();
     if (!content || !matchId || sending) return;
@@ -99,7 +192,7 @@ export default function ChatRoomScreen() {
       if (!session?.access_token) throw new Error('Please log in again.');
 
       const { message } = await sendMessage(session.access_token, matchId, content);
-      setMessages(current => [...current, message]);
+      setMessages(current => mergeMessage(current, message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch (err) {
       setDraft(content);
