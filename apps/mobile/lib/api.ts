@@ -181,6 +181,53 @@ export async function getDiscoveryFeed(accessToken: string, limit = 20) {
   return parseResponse<{ users: DiscoveryUser[] }>(response);
 }
 
+// ─── Users ─────────────────────────────────────────────────────────────────
+
+export type PublicUser = {
+  id: string;
+  name: string;
+  age: number;
+  gender: string;
+  bio: string | null;
+  city: string | null;
+  profile: AppProfile | null;
+  photos: Photo[];
+};
+
+export async function getUserById(accessToken: string, userId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ user: PublicUser }>(response);
+}
+
+// ─── Matches ───────────────────────────────────────────────────────────────
+
+export type MatchUser = {
+  id: string;
+  name: string;
+  age: number;
+  bio: string | null;
+  city: string | null;
+  profile: AppProfile | null;
+  photos: Photo[];
+};
+
+export type Match = {
+  matchId: string;
+  createdAt: string;
+  user: MatchUser;
+};
+
+export async function getMatches(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<Match[]>(response);
+}
+
+// ─── Swipes ────────────────────────────────────────────────────────────────
+
 export type SwipeAction = 'LIKE' | 'DISLIKE' | 'SUPER_LIKE';
 
 export async function createSwipe(accessToken: string, targetId: string, action: SwipeAction) {

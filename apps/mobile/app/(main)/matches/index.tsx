@@ -1,11 +1,37 @@
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { colors, IconButton, people } from '@/design/system';
-
-const newMatches = [...people, ...people].map((p, i) => ({ ...p, id: String(i) }));
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { colors, IconButton } from '@/design/system';
+import { getMatches, type Match } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
 export default function MatchesScreen() {
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      async function load() {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        try {
+          const data = await getMatches(session.access_token);
+          if (!cancelled) setMatches(data);
+        } catch {
+          // keep existing state
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      }
+
+      load();
+      return () => { cancelled = true; };
+    }, [])
+  );
+
   return (
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
@@ -13,22 +39,40 @@ export default function MatchesScreen() {
         <IconButton icon="options-outline" />
       </View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <Text style={styles.sectionTitle}>New matches</Text>
-        <View style={styles.grid}>
-          {newMatches.map((person) => (
-            <Pressable
-              key={person.id}
-              style={styles.card}
-              onPress={() => router.push({ pathname: '/(main)/discover/[userId]', params: { userId: person.id } })}
-            >
-              <Image source={{ uri: person.image }} style={styles.cardImage} contentFit="cover" />
-              <View style={styles.cardFooter}>
-                <Text style={styles.cardName}>{person.name}</Text>
-                <Text style={styles.cardMeta}>{person.age} · {person.distance}</Text>
-              </View>
-            </Pressable>
-          ))}
-        </View>
+        {loading ? (
+          <ActivityIndicator color={colors.primary} style={styles.loader} />
+        ) : matches.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>No matches yet</Text>
+            <Text style={styles.emptySubtext}>Keep swiping to find your match!</Text>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>New matches</Text>
+            <View style={styles.grid}>
+              {matches.map(({ matchId, user }) => {
+                const primaryPhoto = (user.photos.find(p => p.isPrimary) ?? user.photos[0])?.url ?? '';
+                return (
+                  <Pressable
+                    key={matchId}
+                    style={styles.card}
+                    onPress={() => router.push({ pathname: '/(main)/discover/[userId]', params: { userId: user.id } })}
+                  >
+                    {primaryPhoto ? (
+                      <Image source={{ uri: primaryPhoto }} style={styles.cardImage} contentFit="cover" />
+                    ) : (
+                      <View style={[styles.cardImage, styles.cardImagePlaceholder]} />
+                    )}
+                    <View style={styles.cardFooter}>
+                      <Text style={styles.cardName}>{user.name}</Text>
+                      <Text style={styles.cardMeta}>{user.age}{user.city ? ` · ${user.city}` : ''}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -55,6 +99,26 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 28,
     paddingBottom: 34,
+    flexGrow: 1,
+  },
+  loader: {
+    marginTop: 60,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 80,
+    gap: 10,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  emptySubtext: {
+    color: colors.muted,
+    fontSize: 14,
   },
   sectionTitle: {
     color: colors.text,
@@ -77,6 +141,9 @@ const styles = StyleSheet.create({
   cardImage: {
     width: '100%',
     aspectRatio: 3 / 4,
+  },
+  cardImagePlaceholder: {
+    backgroundColor: colors.line,
   },
   cardFooter: {
     padding: 12,
