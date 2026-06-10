@@ -87,6 +87,8 @@ export default function ChatRoomScreen() {
   const photoUrl = firstParam(params.photoUrl) ?? photos.redhead;
 
   const scrollRef = useRef<ScrollView>(null);
+  const currentUserIdRef = useRef<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -94,15 +96,17 @@ export default function ChatRoomScreen() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadThread = useCallback(async () => {
+  const loadThread = useCallback(async (showLoading = true) => {
     if (!matchId) {
       setError('Missing match id');
       setLoading(false);
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    if (showLoading) {
+      setLoading(true);
+    }
+    setError(current => (current === 'Realtime connection failed. Refreshing messages.' ? null : current));
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -119,8 +123,10 @@ export default function ChatRoomScreen() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
     } finally {
-      setLoading(false);
-      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+      if (showLoading) {
+        setLoading(false);
+        requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+      }
     }
   }, [matchId]);
 
@@ -129,73 +135,128 @@ export default function ChatRoomScreen() {
   }, [loadThread]);
 
   useEffect(() => {
+    currentUserIdRef.current = currentUserId;
+  }, [currentUserId]);
+
+  useEffect(() => {
     if (!matchId) return;
 
-    const channel = supabase
-      .channel(`messages:${matchId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `match_id=eq.${matchId}`,
-        },
-        (payload) => {
-          const message = mapRealtimeMessage(payload.new as RealtimeMessageRow);
-          setMessages(current => mergeMessage(current, message));
-          requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    const activeMatchId = matchId;
+    let closed = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-          if (currentUserId && message.senderId && message.senderId !== currentUserId) {
-            supabase.auth.getSession().then(({ data: { session } }) => {
-              if (session?.access_token) {
-                markMessagesRead(session.access_token, matchId).catch(() => null);
-              }
-            });
+    async function startRealtime() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token || closed) return;
+
+      supabase.realtime.setAuth(session.access_token);
+
+      channel = supabase
+        .channel(`messages:${activeMatchId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+            filter: `match_id=eq.${activeMatchId}`,
+          },
+          (payload) => {
+            const message = mapRealtimeMessage(payload.new as RealtimeMessageRow);
+            setMessages(current => mergeMessage(current, message));
+            requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
+            const activeUserId = currentUserIdRef.current;
+            if (activeUserId && message.senderId && message.senderId !== activeUserId) {
+              supabase.auth.getSession().then(({ data: { session } }) => {
+                if (session?.access_token) {
+                  markMessagesRead(session.access_token, activeMatchId).catch(() => null);
+                }
+              });
+            }
           }
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'messages',
-          filter: `match_id=eq.${matchId}`,
-        },
-        (payload) => {
-          const message = mapRealtimeMessage(payload.new as RealtimeMessageRow);
-          setMessages(current => mergeMessage(current, message));
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') {
-          setError('Realtime connection failed. Pull to refresh messages.');
-        }
-      });
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'messages',
+            filter: `match_id=eq.${activeMatchId}`,
+          },
+          (payload) => {
+            const message = mapRealtimeMessage(payload.new as RealtimeMessageRow);
+            setMessages(current => mergeMessage(current, message));
+          }
+        )
+        .subscribe((status) => {
+          if (closed) return;
+
+          if (status === 'SUBSCRIBED') {
+            setError(null);
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+          }
+
+          if (status === 'CHANNEL_ERROR') {
+            setError('Realtime connection failed. Refreshing messages.');
+            if (!pollingRef.current) {
+              pollingRef.current = setInterval(() => {
+                loadThread(false);
+              }, 4000);
+            }
+          }
+        });
+    }
+
+    startRealtime();
 
     return () => {
-      supabase.removeChannel(channel);
+      closed = true;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
     };
-  }, [currentUserId, matchId]);
+  }, [loadThread, matchId]);
 
   const handleSend = async () => {
     const content = draft.trim();
     if (!content || !matchId || sending) return;
 
+    const tempId = `pending-${Date.now()}`;
+    const optimisticMessage: ChatMessage = {
+      id: tempId,
+      matchId,
+      senderId: currentUserId,
+      content,
+      messageType: 'TEXT',
+      isRead: false,
+      createdAt: new Date().toISOString(),
+      sender: null,
+    };
+
     setDraft('');
     setSending(true);
     setError(null);
+    setMessages(current => mergeMessage(current, optimisticMessage));
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Please log in again.');
 
       const { message } = await sendMessage(session.access_token, matchId, content);
-      setMessages(current => mergeMessage(current, message));
+      setMessages(current => mergeMessage(current.filter(item => item.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch (err) {
       setDraft(content);
+      setMessages(current => current.filter(item => item.id !== tempId));
       setError(err instanceof Error ? err.message : 'Failed to send message');
     } finally {
       setSending(false);

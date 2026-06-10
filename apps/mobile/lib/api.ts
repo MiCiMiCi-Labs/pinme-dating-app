@@ -229,7 +229,7 @@ export type ChatMatch = {
   };
 };
 
-export async function getMatches(accessToken: string) {
+export async function getChatMatches(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
     headers: authHeaders(accessToken),
   });
