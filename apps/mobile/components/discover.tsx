@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,8 +28,14 @@ export function DiscoverCard({
   pan: Animated.ValueXY;
   panHandlers: object;
 }) {
-  const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
-  const photoUrl = primaryPhoto?.url ?? '';
+  const sortedPhotos = [
+    ...user.photos.filter(p => p.isPrimary),
+    ...user.photos.filter(p => !p.isPrimary).sort((a, b) => a.orderIndex - b.orderIndex),
+  ];
+  const [photoIndex, setPhotoIndex] = useState(0);
+  const photoIndexRef = useRef(0);
+
+  const currentPhoto = sortedPhotos[photoIndex];
 
   const rotate = pan.x.interpolate({
     inputRange: [-200, 0, 200],
@@ -49,6 +55,16 @@ export function DiscoverCard({
     extrapolate: 'clamp',
   });
 
+  const handleTap = (side: 'left' | 'right') => {
+    const total = sortedPhotos.length;
+    if (total <= 1) return;
+    const next = side === 'right'
+      ? Math.min(photoIndexRef.current + 1, total - 1)
+      : Math.max(photoIndexRef.current - 1, 0);
+    photoIndexRef.current = next;
+    setPhotoIndex(next);
+  };
+
   return (
     <Animated.View
       {...panHandlers}
@@ -58,9 +74,29 @@ export function DiscoverCard({
         { transform: [{ translateX: pan.x }, { translateY: pan.y }, { rotate }] },
       ]}
     >
-      {photoUrl ? (
-        <Image source={{ uri: photoUrl }} style={styles.cardImage} contentFit="cover" />
+      {currentPhoto ? (
+        <Image source={{ uri: currentPhoto.url }} style={styles.cardImage} contentFit="cover" />
       ) : null}
+
+      {/* tap zones for photo navigation */}
+      {sortedPhotos.length > 1 && (
+        <View style={styles.tapZones} pointerEvents="box-none">
+          <Pressable style={styles.tapLeft} onPress={() => handleTap('left')} />
+          <Pressable style={styles.tapRight} onPress={() => handleTap('right')} />
+        </View>
+      )}
+
+      {/* photo progress bars */}
+      {sortedPhotos.length > 1 && (
+        <View style={styles.progressBars}>
+          {sortedPhotos.map((_, i) => (
+            <View key={i} style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, i <= photoIndex && styles.progressBarActive]} />
+            </View>
+          ))}
+        </View>
+      )}
+
       {user.distanceKm ? (
         <View style={styles.distanceBadge}>
           <Ionicons name="location-outline" size={14} color="#FFFFFF" />
@@ -363,6 +399,34 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
   },
   cardImage: { ...StyleSheet.absoluteFillObject },
+  tapZones: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+  },
+  tapLeft: { flex: 1 },
+  tapRight: { flex: 1 },
+  progressBars: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    right: 10,
+    flexDirection: 'row',
+    gap: 4,
+  },
+  progressBarTrack: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  progressBarActive: {
+    backgroundColor: '#FFFFFF',
+  },
   distanceBadge: {
     position: 'absolute',
     top: 20,

@@ -5,6 +5,7 @@ import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/compone
 import { colors, IconButton, ScreenTitle } from '@/design/system';
 import { createSwipe, getDiscoveryFeed, getMyPhotos, type DiscoveryUser } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
+import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 
 const SWIPE_THRESHOLD = 100;
 
@@ -53,6 +54,7 @@ export default function SwipeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      setUsers(prev => filterSwiped(prev));
       const cancelled = { current: false };
       loadFeed(cancelled);
       return () => { cancelled.current = true; };
@@ -71,6 +73,7 @@ export default function SwipeScreen() {
     setCurrentIndex(prev => prev + 1);
 
     if (!user) return;
+    markSwiped(user.id);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
