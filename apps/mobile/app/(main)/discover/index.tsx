@@ -35,60 +35,50 @@ export default function SwipeScreen() {
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
+  const loadFeed = useCallback(async (cancelled?: { current: boolean }) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    if (!hasLoadedRef.current) setLoading(true);
+    try {
+      const [{ user: appUser }, myPhotos] = await Promise.all([
+        getCurrentAppUser(session.access_token),
+        getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
+      ]);
 
-      async function load() {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        if (!hasLoadedRef.current) setLoading(true);
-        try {
-          const [{ user: appUser }, myPhotos] = await Promise.all([
-            getCurrentAppUser(session.access_token),
-            getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
-          ]);
+      const completion = getDetailedProfileCompletion(appUser, myPhotos);
 
-          const completion = getDetailedProfileCompletion(appUser, myPhotos);
-
-          if (!cancelled) {
-            setProfileCompletionPercent(completion.percent);
-          }
-
-          if (completion.percent < matchingProfileCompletionThreshold) {
-            if (!cancelled) {
-              setUsers([]);
-              setCurrentIndex(0);
-              const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-              setMyPhotoUrl(primary?.url ?? null);
-              hasLoadedRef.current = true;
-            }
-            return;
-          }
-
-          const { users: feed } = await getDiscoveryFeed(session.access_token);
-
-          if (!cancelled) {
-            setUsers(feed);
-            setCurrentIndex(0);
-            pan.setValue({ x: 0, y: 0 });
-            const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-            setMyPhotoUrl(primary?.url ?? null);
-            hasLoadedRef.current = true;
-          }
-        } catch {
-          // keep existing state on error
-        } finally {
-          if (!cancelled) {
-            hasLoadedRef.current = true;
-            setLoading(false);
-          }
-        }
+      if (!cancelled?.current) {
+        setProfileCompletionPercent(completion.percent);
       }
-    } catch {
+
+      if (completion.percent < matchingProfileCompletionThreshold) {
+        if (!cancelled?.current) {
+          setUsers([]);
+          setCurrentIndex(0);
+          const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+          setMyPhotoUrl(primary?.url ?? null);
+          hasLoadedRef.current = true;
+        }
+        return;
+      }
+
+      const { users: feed } = await getDiscoveryFeed(session.access_token);
+
+      if (!cancelled?.current) {
+        setUsers(feed);
+        setCurrentIndex(0);
+        pan.setValue({ x: 0, y: 0 });
+        const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+        setMyPhotoUrl(primary?.url ?? null);
+        hasLoadedRef.current = true;
+      }
+    } catch (_) {
       // keep existing state on error
     } finally {
-      if (!cancelled?.current) setLoading(false);
+      if (!cancelled?.current) {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      }
     }
   }, [pan]);
 
@@ -127,7 +117,7 @@ export default function SwipeScreen() {
         setMatchedUser(user);
         setMatchedMatchId(match.id);
       }
-    } catch {
+    } catch (_) {
       // non-blocking — card already advanced
     }
   }, [pan]);

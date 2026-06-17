@@ -28,7 +28,7 @@ export default function ProfileDetailScreen() {
       try {
         const { user: data } = await getUserById(session.access_token, userId);
         if (!cancelled) setUser(data);
-      } catch {
+      } catch (_) {
         // keep null — ProfileDetailContent handles missing state
       } finally {
         if (!cancelled) setLoading(false);
@@ -66,7 +66,7 @@ export default function ProfileDetailScreen() {
       if (!session) return null;
       try {
         return await createSwipe(session.access_token, user.id, 'LIKE');
-      } catch {
+      } catch (_) {
         return null;
       }
     })();

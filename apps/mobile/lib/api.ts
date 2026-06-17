@@ -247,6 +247,7 @@ export type Photo = {
   id: string;
   url: string;
   isPrimary: boolean;
+  isVerified: boolean;
   orderIndex: number;
 };
 

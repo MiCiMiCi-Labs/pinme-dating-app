@@ -10,15 +10,15 @@ import { type Photo, type PublicUser } from '@/lib/api';
 export function PhotoCarousel({ photos, height }: { photos: Photo[]; height: number }) {
   const [index, setIndex] = useState(0);
   const indexRef = useRef(0);
+  const current = photos[index] ?? null;
 
-  const primaryPhoto = user ? (user.photos.find(p => p.isPrimary) ?? user.photos[0]) : null;
-  const galleryPhotos = user ? user.photos.slice(0, 5) : [];
-  const profile = user?.profile;
-  const prompts = [
-    { question: profile?.prompt1Question ?? 'A little more about me', answer: profile?.prompt1 },
-    { question: profile?.prompt2Question ?? 'You should know', answer: profile?.prompt2 },
-    { question: profile?.prompt3Question ?? 'Message me if', answer: profile?.prompt3 },
-  ].filter((prompt) => prompt.answer?.trim());
+  function handleTap(side: 'left' | 'right') {
+    const next = side === 'left'
+      ? Math.max(0, indexRef.current - 1)
+      : Math.min(photos.length - 1, indexRef.current + 1);
+    indexRef.current = next;
+    setIndex(next);
+  }
 
   return (
     <View style={{ height }}>
@@ -70,17 +70,23 @@ function Badge({ emoji, label }: { emoji: string; label: string }) {
 }
 
 export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user: PublicUser | null; onLike?: () => void; onDislike?: () => void; liked?: boolean }) {
-  const p = user?.profile;
+  const profile = user?.profile;
 
   const badges = [
-    p?.height         ? { emoji: '📏', label: `${p.height} cm` }                        : null,
-    p?.education      ? { emoji: '🎓', label: p.education }                             : null,
-    p?.relationshipGoal ? { emoji: '💛', label: GOAL_LABELS[p.relationshipGoal] ?? p.relationshipGoal } : null,
-    p?.mbti           ? { emoji: '🧠', label: p.mbti }                                  : null,
-    p?.constellation  ? { emoji: '✨', label: p.constellation }                         : null,
-    p?.drinking       ? { emoji: '🍷', label: p.drinking }                              : null,
-    p?.smoking        ? { emoji: '🚬', label: p.smoking }                               : null,
+    profile?.height         ? { emoji: '📏', label: `${profile.height} cm` }                              : null,
+    profile?.education      ? { emoji: '🎓', label: profile.education }                                   : null,
+    profile?.relationshipGoal ? { emoji: '💛', label: GOAL_LABELS[profile.relationshipGoal] ?? profile.relationshipGoal } : null,
+    profile?.mbti           ? { emoji: '🧠', label: profile.mbti }                                        : null,
+    profile?.constellation  ? { emoji: '✨', label: profile.constellation }                               : null,
+    profile?.drinking       ? { emoji: '🍷', label: profile.drinking }                                    : null,
+    profile?.smoking        ? { emoji: '🚬', label: profile.smoking }                                     : null,
   ].filter(Boolean) as { emoji: string; label: string }[];
+
+  const prompts = [
+    { question: profile?.prompt1Question ?? 'A little more about me', answer: profile?.prompt1 },
+    { question: profile?.prompt2Question ?? 'You should know', answer: profile?.prompt2 },
+    { question: profile?.prompt3Question ?? 'Message me if', answer: profile?.prompt3 },
+  ].filter((prompt) => prompt.answer?.trim());
 
   return (
     <>
@@ -89,7 +95,7 @@ export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user:
           {user ? `${user.name}, ${user.age}` : '—'}
         </Text>
         <Text style={styles.role}>
-          {p?.jobTitle ?? user?.city ?? ''}
+          {profile?.jobTitle ?? user?.city ?? ''}
         </Text>
 
         {badges.length > 0 && (

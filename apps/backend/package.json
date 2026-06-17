@@ -13,6 +13,7 @@
     "db:seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.1070.0",
     "@prisma/client": "^5.22.0",
     "@supabase/supabase-js": "^2.45.0",
     "cors": "^2.8.5",

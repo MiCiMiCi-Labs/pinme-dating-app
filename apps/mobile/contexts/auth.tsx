@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         try {
           await syncAuthUser(session.access_token);
-        } catch {
+        } catch (_) {
           // Existing users can still evaluate completeness from current profile data.
         }
 
@@ -98,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           getMyPhotos(session.access_token).catch(() => []),
         ]);
         complete = hasCompleteProfile(user, profile, photos.length);
-      } catch {
+      } catch (_) {
         complete = false;
       }
 
@@ -124,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       try {
         await syncAuthUser(session.access_token);
-      } catch {
+      } catch (_) {
         // Keep refresh working even if sync endpoint fails for older records.
       }
 
@@ -135,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const complete = hasCompleteProfile(user, profile, photos.length);
       setProfileComplete(complete);
       return complete;
-    } catch {
+    } catch (_) {
       setProfileComplete(false);
       return false;
     }
