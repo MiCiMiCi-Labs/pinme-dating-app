@@ -20,6 +20,7 @@ export default function SwipeScreen() {
   const cardHeight = Math.min(height * 0.54, 440);
 
   const pan = useRef(new Animated.ValueXY()).current;
+  const hasLoadedRef = useRef(false);
   const swipingRef = useRef(false);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
@@ -34,7 +35,7 @@ export default function SwipeScreen() {
       async function load() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
-        setLoading(true);
+        if (!hasLoadedRef.current) setLoading(true);
         try {
           const [{ users: feed }, myPhotos] = await Promise.all([
             getDiscoveryFeed(session.access_token),
@@ -46,11 +47,15 @@ export default function SwipeScreen() {
             pan.setValue({ x: 0, y: 0 });
             const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
             setMyPhotoUrl(primary?.url ?? null);
+            hasLoadedRef.current = true;
           }
         } catch {
           // keep existing state on error
         } finally {
-          if (!cancelled) setLoading(false);
+          if (!cancelled) {
+            hasLoadedRef.current = true;
+            setLoading(false);
+          }
         }
       }
 

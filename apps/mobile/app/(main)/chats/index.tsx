@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { ChatPreviewRow } from '@/components/cards';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
-import { getMatches, type ChatMatch } from '@/lib/api';
+import { getChatMatches, type ChatMatch } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
 function getPrimaryPhoto(match: ChatMatch) {
@@ -47,9 +47,10 @@ export default function ChatListScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const loadMatches = useCallback(async (showSpinner = true) => {
-    if (showSpinner) setLoading(true);
+    if (showSpinner && !hasLoadedRef.current) setLoading(true);
     setError(null);
 
     try {
@@ -59,11 +60,13 @@ export default function ChatListScreen() {
         return;
       }
 
-      const data = await getMatches(session.access_token);
+      const data = await getChatMatches(session.access_token);
       setMatches(data);
+      hasLoadedRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load chats');
     } finally {
+      hasLoadedRef.current = true;
       setLoading(false);
       setRefreshing(false);
     }
@@ -71,7 +74,7 @@ export default function ChatListScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadMatches();
+      loadMatches(!hasLoadedRef.current);
     }, [loadMatches])
   );
 
