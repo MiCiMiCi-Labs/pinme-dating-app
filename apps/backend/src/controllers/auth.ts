@@ -2,6 +2,41 @@ import { Gender } from '@prisma/client';
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 
+function getSyncErrorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    const maybePrisma = error as Error & {
+      code?: string;
+      meta?: unknown;
+      clientVersion?: string;
+    };
+    const parts = [error.message];
+
+    if (typeof maybePrisma.code === 'string') {
+      parts.push(`code=${maybePrisma.code}`);
+    }
+
+    if (maybePrisma.meta) {
+      parts.push(`meta=${JSON.stringify(maybePrisma.meta)}`);
+    }
+
+    if (typeof maybePrisma.clientVersion === 'string') {
+      parts.push(`clientVersion=${maybePrisma.clientVersion}`);
+    }
+
+    return parts.join(' | ');
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'unknown sync error';
+  }
+}
+
 function parseBirthday(value: unknown): Date | null {
   if (typeof value !== 'string') {
     return null;
@@ -115,8 +150,12 @@ export async function syncCurrentUser(req: Request, res: Response) {
       user,
     });
   } catch (error) {
-    console.error('Auth sync error:', error);
-    res.status(500).json({ message: 'Failed to sync user' });
+    const detail = getSyncErrorDetail(error);
+    console.error('Auth sync error:', detail);
+    res.status(500).json({
+      message: 'Failed to sync user',
+      ...(process.env.NODE_ENV !== 'production' ? { detail } : {}),
+    });
   }
 }
 

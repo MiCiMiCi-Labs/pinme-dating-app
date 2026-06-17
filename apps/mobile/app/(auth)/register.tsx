@@ -15,14 +15,15 @@ import {
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton } from '@/design/system';
-
-type Gender = 'MALE' | 'FEMALE' | 'NON_BINARY' | 'OTHER';
+import { birthdayInputToIso, formatBirthdayInput } from '@/lib/birthday';
+import type { Gender } from '@/lib/api';
 
 const genderOptions: Array<{ label: string; value: Gender }> = [
   { label: 'Woman', value: 'FEMALE' },
   { label: 'Man', value: 'MALE' },
   { label: 'Non-binary', value: 'NON_BINARY' },
-  { label: 'Other', value: 'OTHER' },
+  { label: 'Self-describe', value: 'SELF_DESCRIBE' },
+  { label: 'Prefer not to say', value: 'PREFER_NOT_TO_SAY' },
 ];
 
 function getRegistrationValidationError({
@@ -52,10 +53,8 @@ function getRegistrationValidationError({
     return 'Birthday is required';
   }
 
-  const birthdayDate = new Date(birthday);
-
-  if (Number.isNaN(birthdayDate.getTime())) {
-    return 'Birthday must be a valid date, e.g. 2000-01-01';
+  if (!birthdayInputToIso(birthday)) {
+    return 'Birthday must be a valid date, e.g. 01-01-2000';
   }
 
   return null;
@@ -65,7 +64,7 @@ export default function RegisterScreen() {
   const [name, setName] = useState('Mia');
   const [email, setEmail] = useState('123@gmail.com');
   const [password, setPassword] = useState('');
-  const [birthday, setBirthday] = useState('2000-01-01');
+  const [birthday, setBirthday] = useState('01-01-2000');
   const [gender, setGender] = useState<Gender>('FEMALE');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -90,6 +89,13 @@ export default function RegisterScreen() {
     setSubmitting(true);
 
     try {
+      const birthdayIso = birthdayInputToIso(birthday);
+
+      if (!birthdayIso) {
+        setError('Birthday must be a valid date, e.g. 01-01-2000');
+        return;
+      }
+
       const { data, error: authError } = await supabase.auth.signUp({
         email: email.trim(),
         password,
@@ -97,7 +103,7 @@ export default function RegisterScreen() {
           data: {
             name: name.trim(),
             gender,
-            birthday,
+            birthday: birthdayIso,
           },
         },
       });
@@ -158,8 +164,9 @@ export default function RegisterScreen() {
           <AuthField
             icon="calendar-outline"
             value={birthday}
-            onChangeText={setBirthday}
-            placeholder="Birthday, e.g. 2000-01-01"
+            onChangeText={(value) => setBirthday(formatBirthdayInput(value))}
+            placeholder="Birthday, e.g. 01-01-2000"
+            keyboardType="number-pad"
           />
 
           <Text style={styles.label}>Gender</Text>
@@ -207,7 +214,7 @@ function AuthField({
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
-  keyboardType?: 'default' | 'email-address';
+  keyboardType?: 'default' | 'email-address' | 'number-pad';
   secureTextEntry?: boolean;
 }) {
   return (

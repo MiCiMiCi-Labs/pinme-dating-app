@@ -2,8 +2,12 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
-import { colors, IconButton, ScreenTitle } from '@/design/system';
-import { createSwipe, getDiscoveryFeed, getMyPhotos, type DiscoveryUser } from '@/lib/api';
+import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
+import { createSwipe, getCurrentAppUser, getDiscoveryFeed, getMyPhotos, type DiscoveryUser } from '@/lib/api';
+import {
+  getDetailedProfileCompletion,
+  matchingProfileCompletionThreshold,
+} from '@/lib/profileCompleteness';
 import { supabase } from '@/lib/supabase';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 
@@ -16,6 +20,7 @@ export default function SwipeScreen() {
   const [matchedUser, setMatchedUser] = useState<DiscoveryUser | null>(null);
   const [matchedMatchId, setMatchedMatchId] = useState<string | null>(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
+  const [profileCompletionPercent, setProfileCompletionPercent] = useState<number | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [feedKey, setFeedKey] = useState(0);
   const { height } = useWindowDimensions();
@@ -35,10 +40,30 @@ export default function SwipeScreen() {
     if (!session) return;
     if (!hasLoadedRef.current) setLoading(true);
     try {
-      const [{ users: feed }, myPhotos] = await Promise.all([
-        getDiscoveryFeed(session.access_token),
+      const [{ user: appUser }, myPhotos] = await Promise.all([
+        getCurrentAppUser(session.access_token),
         getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
       ]);
+
+      const completion = getDetailedProfileCompletion(appUser, myPhotos);
+
+      if (!cancelled?.current) {
+        setProfileCompletionPercent(completion.percent);
+      }
+
+      if (completion.percent < matchingProfileCompletionThreshold) {
+        if (!cancelled?.current) {
+          setUsers([]);
+          setCurrentIndex(0);
+          const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+          setMyPhotoUrl(primary?.url ?? null);
+          hasLoadedRef.current = true;
+        }
+        return;
+      }
+
+      const { users: feed } = await getDiscoveryFeed(session.access_token);
+
       if (!cancelled?.current) {
         setUsers(feed);
         setCurrentIndex(0);
@@ -50,7 +75,10 @@ export default function SwipeScreen() {
     } catch (_) {
       // keep existing state on error
     } finally {
-      if (!cancelled?.current) setLoading(false);
+      if (!cancelled?.current) {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      }
     }
   }, [pan]);
 
@@ -150,7 +178,19 @@ export default function SwipeScreen() {
       />
 
       <View style={[styles.deck, { height: cardHeight + 38 }]}>
-        {!loading && !currentUser ? (
+        {!loading &&
+        profileCompletionPercent !== null &&
+        profileCompletionPercent < matchingProfileCompletionThreshold ? (
+          <View style={styles.lockedState}>
+            <Text style={styles.emptyTitle}>Complete your profile first</Text>
+            <Text style={styles.emptySubtext}>
+              Your profile is {profileCompletionPercent}% complete. Reach {matchingProfileCompletionThreshold}% to start matching.
+            </Text>
+            <PrimaryButton onPress={() => router.push('/(main)/profile')} style={styles.lockedButton}>
+              Improve profile
+            </PrimaryButton>
+          </View>
+        ) : !loading && !currentUser ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>You're all caught up</Text>
             <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
@@ -173,10 +213,13 @@ export default function SwipeScreen() {
         )}
       </View>
 
-      <SwipeActions
-        onNope={() => animateSwipe('nope')}
-        onLike={() => animateSwipe('like')}
-      />
+      {profileCompletionPercent === null ||
+      profileCompletionPercent >= matchingProfileCompletionThreshold ? (
+        <SwipeActions
+          onNope={() => animateSwipe('nope')}
+          onLike={() => animateSwipe('like')}
+        />
+      ) : null}
 
       {filterOpen ? (
         <FilterSheet
@@ -237,6 +280,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 40,
     gap: 10,
+  },
+  lockedState: {
+    alignItems: 'center',
+    paddingHorizontal: 34,
+    gap: 12,
+  },
+  lockedButton: {
+    alignSelf: 'stretch',
+    marginTop: 8,
   },
   emptyTitle: {
     color: colors.text,
