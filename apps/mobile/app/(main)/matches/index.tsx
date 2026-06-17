@@ -20,12 +20,12 @@ export default function MatchesScreen() {
         if (!session) return;
         if (!hasLoadedRef.current) setLoading(true);
         try {
-          const data = await getMatches(session.access_token);
+          const data = await getChatMatches(session.access_token);
           if (!cancelled) {
             setMatches(data);
             hasLoadedRef.current = true;
           }
-        } catch {
+        } catch (_) {
           // keep existing state
         } finally {
           if (!cancelled) {

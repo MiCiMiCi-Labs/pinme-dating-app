@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
-import { getMyProfile, type AppProfile, type AppUser } from '@/lib/api';
+import { getMyProfile, syncAuthUser, type AppProfile, type AppUser } from '@/lib/api';
 
 type AuthContextType = {
   session: Session | null;
@@ -80,9 +80,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let complete = false;
 
       try {
+        await syncAuthUser(session.access_token);
         const { user, profile } = await getMyProfile(session.access_token);
         complete = hasCompleteProfile(user, profile);
-      } catch {
+      } catch (_) {
         complete = false;
       }
 
@@ -110,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const complete = hasCompleteProfile(user, profile);
       setProfileComplete(complete);
       return complete;
-    } catch {
+    } catch (_) {
       setProfileComplete(false);
       return false;
     }

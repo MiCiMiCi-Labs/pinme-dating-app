@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { supabase } from '../lib/supabase';
 import { BUCKET, MAX_PHOTOS } from '../lib/storage';
+import { checkContentModeration, verifyFacePhoto } from '../lib/rekognition';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -48,6 +49,34 @@ export async function uploadPhoto(req: Request, res: Response) {
       return;
     }
 
+    const modCheck = await checkContentModeration(req.file.buffer);
+    if (!modCheck.passed && modCheck.blockedLabel !== 'service_error') {
+      res.status(400).json({ error: 'This photo violates our content policy.' });
+      return;
+    }
+
+    const isFirstPhoto = count === 0;
+    let isVerified = false;
+    let verifiedAt: Date | null = null;
+
+    if (isFirstPhoto) {
+      const verification = await verifyFacePhoto(req.file.buffer);
+      if (!verification.passed && verification.reason !== 'service_error') {
+        const reasonMessages: Record<string, string> = {
+          no_face: 'Your primary photo must clearly show your face.',
+          low_confidence: 'We couldn\'t detect a clear face. Try a better lit photo.',
+          low_quality: 'Photo quality is too low. Try a clearer, brighter photo.',
+          content_policy: 'This photo doesn\'t meet our content guidelines.',
+        };
+        res.status(400).json({
+          error: reasonMessages[verification.reason ?? ''] ?? 'Primary photo must show a clear face.',
+        });
+        return;
+      }
+      isVerified = verification.passed;
+      verifiedAt = verification.passed ? new Date() : null;
+    }
+
     const photoId = crypto.randomUUID();
     const ext = req.file.mimetype === 'image/jpeg' ? 'jpg' : req.file.mimetype.split('/')[1];
     const storagePath = `${dbUserId}/${photoId}.${ext}`;
@@ -72,7 +101,9 @@ export async function uploadPhoto(req: Request, res: Response) {
         userId: dbUserId,
         url: publicUrl,
         orderIndex: count,
-        isPrimary: count === 0,
+        isPrimary: isFirstPhoto,
+        isVerified,
+        verifiedAt,
       },
     });
 
@@ -102,9 +133,36 @@ export async function setPrimaryPhoto(req: Request, res: Response) {
       return;
     }
 
+    // Verify face before committing the primary change
+    const imgRes = await fetch(photo.url);
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    const verification = await verifyFacePhoto(buffer);
+
+    const verificationFailedMessages: Record<string, string> = {
+      no_face: 'Your primary photo must clearly show your face.',
+      low_confidence: 'We couldn\'t detect a clear face. Try a better lit photo.',
+      low_quality: 'Photo quality is too low. Try a clearer, brighter photo.',
+      content_policy: 'This photo doesn\'t meet our content guidelines.',
+    };
+
+    // Block on face/content failures — allow through on service errors (AWS down)
+    if (!verification.passed && verification.reason !== 'service_error') {
+      res.status(400).json({
+        error: verificationFailedMessages[verification.reason ?? ''] ?? 'Primary photo must show a clear face.',
+      });
+      return;
+    }
+
     await prisma.$transaction([
       prisma.photo.updateMany({ where: { userId: dbUserId }, data: { isPrimary: false } }),
-      prisma.photo.update({ where: { id: photoId }, data: { isPrimary: true } }),
+      prisma.photo.update({
+        where: { id: photoId },
+        data: {
+          isPrimary: true,
+          isVerified: verification.passed,
+          verifiedAt: verification.passed ? new Date() : null,
+        },
+      }),
     ]);
 
     const updated = await prisma.photo.findUnique({ where: { id: photoId } });

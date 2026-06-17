@@ -219,7 +219,7 @@ export default function CompleteProfileScreen() {
       for (const photo of selectedPhotos) {
         try {
           await uploadPhoto(accessToken, photo.uri, photo.mimeType);
-        } catch {
+        } catch (_) {
           // Don't block profile completion on photo upload failures
         }
       }

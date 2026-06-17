@@ -75,6 +75,7 @@ export default function MyProfileScreen() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft);
   const [photoSlots, setPhotoSlots] = useState<Array<string | null>>(Array(6).fill(null));
+  const [primaryVerified, setPrimaryVerified] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const hasLoadedRef = useRef(false);
@@ -100,9 +101,14 @@ export default function MyProfileScreen() {
           if (!cancelled) {
             setUser(appUser);
             setDraft(draftFromUser(appUser));
+            const sorted = [
+              ...photos.filter(p => p.isPrimary),
+              ...photos.filter(p => !p.isPrimary),
+            ];
             const slots: Array<string | null> = Array(6).fill(null);
-            photos.forEach((p, i) => { if (i < 6) slots[i] = p.url; });
+            sorted.forEach((p, i) => { if (i < 6) slots[i] = p.url; });
             setPhotoSlots(slots);
+            setPrimaryVerified(photos.find(p => p.isPrimary)?.isVerified ?? false);
             hasLoadedRef.current = true;
           }
         } catch (error) {
@@ -222,7 +228,7 @@ export default function MyProfileScreen() {
           <IconButton icon="settings-outline" />
         </View>
 
-        <PhotoUploadGrid photos={photoSlots} />
+        <PhotoUploadGrid photos={photoSlots} primaryVerified={primaryVerified} />
 
         <FormSection title="Account">
           <EditableField label="Name" value={user?.name ?? ''} />

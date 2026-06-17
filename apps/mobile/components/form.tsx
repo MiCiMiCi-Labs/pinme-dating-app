@@ -68,7 +68,13 @@ export function EditableTextArea({
   );
 }
 
-export function PhotoUploadGrid({ photos }: { photos: Array<string | null> }) {
+export function PhotoUploadGrid({
+  photos,
+  primaryVerified = false,
+}: {
+  photos: Array<string | null>;
+  primaryVerified?: boolean;
+}) {
   return (
     <Pressable onPress={() => router.push('/(main)/profile/photos')}>
     <View style={styles.photoGrid}>
@@ -83,8 +89,13 @@ export function PhotoUploadGrid({ photos }: { photos: Array<string | null> }) {
             </View>
           )}
           {index === 0 ? (
-            <View style={styles.primaryBadge}>
-              <Text style={styles.primaryBadgeText}>Primary</Text>
+            <View style={[styles.primaryBadge, primaryVerified && styles.verifiedBadge]}>
+              {primaryVerified && (
+                <Ionicons name="checkmark-circle" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
+              )}
+              <Text style={styles.primaryBadgeText}>
+                {primaryVerified ? 'Photo Verified' : 'Primary'}
+              </Text>
             </View>
           ) : null}
         </View>
@@ -189,6 +200,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingHorizontal: 10,
     paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  verifiedBadge: {
+    backgroundColor: '#22C55E',
   },
   primaryBadgeText: {
     color: '#FFFFFF',

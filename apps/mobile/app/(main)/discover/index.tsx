@@ -30,37 +30,24 @@ export default function SwipeScreen() {
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-
-      async function load() {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        if (!hasLoadedRef.current) setLoading(true);
-        try {
-          const [{ users: feed }, myPhotos] = await Promise.all([
-            getDiscoveryFeed(session.access_token),
-            getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
-          ]);
-          if (!cancelled) {
-            setUsers(feed);
-            setCurrentIndex(0);
-            pan.setValue({ x: 0, y: 0 });
-            const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-            setMyPhotoUrl(primary?.url ?? null);
-            hasLoadedRef.current = true;
-          }
-        } catch {
-          // keep existing state on error
-        } finally {
-          if (!cancelled) {
-            hasLoadedRef.current = true;
-            setLoading(false);
-          }
-        }
+  const loadFeed = useCallback(async (cancelled?: { current: boolean }) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    if (!hasLoadedRef.current) setLoading(true);
+    try {
+      const [{ users: feed }, myPhotos] = await Promise.all([
+        getDiscoveryFeed(session.access_token),
+        getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
+      ]);
+      if (!cancelled?.current) {
+        setUsers(feed);
+        setCurrentIndex(0);
+        pan.setValue({ x: 0, y: 0 });
+        const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+        setMyPhotoUrl(primary?.url ?? null);
+        hasLoadedRef.current = true;
       }
-    } catch {
+    } catch (_) {
       // keep existing state on error
     } finally {
       if (!cancelled?.current) setLoading(false);
@@ -102,7 +89,7 @@ export default function SwipeScreen() {
         setMatchedUser(user);
         setMatchedMatchId(match.id);
       }
-    } catch {
+    } catch (_) {
       // non-blocking — card already advanced
     }
   }, [pan]);

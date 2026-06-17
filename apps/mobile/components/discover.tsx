@@ -176,7 +176,7 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
           setMaxAge(preferences.maxAge ?? 99);
         }
         setShowDistance(privacy.showDistance);
-      } catch {}
+      } catch (_) {}
       setLoading(false);
     }
     load();
@@ -199,7 +199,7 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
       if (session) {
         await updateLocation(session.access_token, pos.coords.latitude, pos.coords.longitude, city);
       }
-    } catch {}
+    } catch (_) {}
     setLocating(false);
   };
 
@@ -215,7 +215,7 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
         onApply?.();
         onClose();
       }
-    } catch {}
+    } catch (_) {}
     setSaving(false);
   };
 
