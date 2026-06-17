@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors, IconButton } from '@/design/system';
 import { getChatMatches, type ChatMatch } from '@/lib/api';
@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 export default function MatchesScreen() {
   const [matches, setMatches] = useState<ChatMatch[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -17,13 +18,20 @@ export default function MatchesScreen() {
       async function load() {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
+        if (!hasLoadedRef.current) setLoading(true);
         try {
-          const data = await getChatMatches(session.access_token);
-          if (!cancelled) setMatches(data);
+          const data = await getMatches(session.access_token);
+          if (!cancelled) {
+            setMatches(data);
+            hasLoadedRef.current = true;
+          }
         } catch {
           // keep existing state
         } finally {
-          if (!cancelled) setLoading(false);
+          if (!cancelled) {
+            hasLoadedRef.current = true;
+            setLoading(false);
+          }
         }
       }
 

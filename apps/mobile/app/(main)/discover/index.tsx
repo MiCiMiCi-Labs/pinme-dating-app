@@ -22,6 +22,7 @@ export default function SwipeScreen() {
   const cardHeight = Math.min(height * 0.54, 440);
 
   const pan = useRef(new Animated.ValueXY()).current;
+  const hasLoadedRef = useRef(false);
   const swipingRef = useRef(false);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
@@ -29,21 +30,35 @@ export default function SwipeScreen() {
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
-  const loadFeed = useCallback(async (cancelled?: { current: boolean }) => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-    setLoading(true);
-    try {
-      const [{ users: feed }, myPhotos] = await Promise.all([
-        getDiscoveryFeed(session.access_token),
-        getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
-      ]);
-      if (!cancelled?.current) {
-        setUsers(feed);
-        setCurrentIndex(0);
-        pan.setValue({ x: 0, y: 0 });
-        const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-        setMyPhotoUrl(primary?.url ?? null);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      async function load() {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        if (!hasLoadedRef.current) setLoading(true);
+        try {
+          const [{ users: feed }, myPhotos] = await Promise.all([
+            getDiscoveryFeed(session.access_token),
+            getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
+          ]);
+          if (!cancelled) {
+            setUsers(feed);
+            setCurrentIndex(0);
+            pan.setValue({ x: 0, y: 0 });
+            const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+            setMyPhotoUrl(primary?.url ?? null);
+            hasLoadedRef.current = true;
+          }
+        } catch {
+          // keep existing state on error
+        } finally {
+          if (!cancelled) {
+            hasLoadedRef.current = true;
+            setLoading(false);
+          }
+        }
       }
     } catch {
       // keep existing state on error

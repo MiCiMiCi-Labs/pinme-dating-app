@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { EditableField, EditableTextArea, FormSection, PhotoUploadGrid } from '@/components/form';
 import { colors, IconButton, PrimaryButton } from '@/design/system';
@@ -77,6 +77,7 @@ export default function MyProfileScreen() {
   const [photoSlots, setPhotoSlots] = useState<Array<string | null>>(Array(6).fill(null));
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const hasLoadedRef = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -90,7 +91,7 @@ export default function MyProfileScreen() {
         if (!session) return;
 
         try {
-          setLoading(true);
+          if (!hasLoadedRef.current) setLoading(true);
           const [{ user: appUser }, photos] = await Promise.all([
             getCurrentAppUser(session.access_token),
             getMyPhotos(session.access_token),
@@ -102,6 +103,7 @@ export default function MyProfileScreen() {
             const slots: Array<string | null> = Array(6).fill(null);
             photos.forEach((p, i) => { if (i < 6) slots[i] = p.url; });
             setPhotoSlots(slots);
+            hasLoadedRef.current = true;
           }
         } catch (error) {
           if (!cancelled) {
@@ -112,6 +114,7 @@ export default function MyProfileScreen() {
           }
         } finally {
           if (!cancelled) {
+            hasLoadedRef.current = true;
             setLoading(false);
           }
         }
