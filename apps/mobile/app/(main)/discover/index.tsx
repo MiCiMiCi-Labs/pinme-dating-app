@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
@@ -9,6 +9,7 @@ import {
   matchingProfileCompletionThreshold,
 } from '@/lib/profileCompleteness';
 import { supabase } from '@/lib/supabase';
+import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 
 const SWIPE_THRESHOLD = 100;
 
@@ -21,6 +22,7 @@ export default function SwipeScreen() {
   const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
   const [profileCompletionPercent, setProfileCompletionPercent] = useState<number | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [feedKey, setFeedKey] = useState(0);
   const { height } = useWindowDimensions();
   const cardHeight = Math.min(height * 0.54, 440);
 
@@ -83,11 +85,26 @@ export default function SwipeScreen() {
           }
         }
       }
+    } catch {
+      // keep existing state on error
+    } finally {
+      if (!cancelled?.current) setLoading(false);
+    }
+  }, [pan]);
 
-      load();
-      return () => { cancelled = true; };
-    }, [pan])
+  useFocusEffect(
+    useCallback(() => {
+      setUsers(prev => filterSwiped(prev));
+      const cancelled = { current: false };
+      loadFeed(cancelled);
+      return () => { cancelled.current = true; };
+    }, [loadFeed])
   );
+
+  useEffect(() => {
+    if (feedKey === 0) return;
+    loadFeed();
+  }, [feedKey, loadFeed]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -96,6 +113,7 @@ export default function SwipeScreen() {
     setCurrentIndex(prev => prev + 1);
 
     if (!user) return;
+    markSwiped(user.id);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
@@ -213,7 +231,12 @@ export default function SwipeScreen() {
         />
       ) : null}
 
-      {filterOpen ? <FilterSheet onClose={() => setFilterOpen(false)} /> : null}
+      {filterOpen ? (
+        <FilterSheet
+          onClose={() => setFilterOpen(false)}
+          onApply={() => setFeedKey(k => k + 1)}
+        />
+      ) : null}
 
       {matchedUser ? (
         <MatchOverlay

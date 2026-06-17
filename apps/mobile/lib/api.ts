@@ -330,29 +330,6 @@ export async function getUserById(accessToken: string, userId: string) {
 
 // ─── Matches ───────────────────────────────────────────────────────────────
 
-export type MatchUser = {
-  id: string;
-  name: string;
-  age: number;
-  bio: string | null;
-  city: string | null;
-  profile: AppProfile | null;
-  photos: Photo[];
-};
-
-export type Match = {
-  matchId: string;
-  createdAt: string;
-  user: MatchUser;
-};
-
-export async function getMatches(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
-    headers: authHeaders(accessToken),
-  });
-  return parseResponse<Match[]>(response);
-}
-
 // ─── Swipes ────────────────────────────────────────────────────────────────
 
 export type SwipeAction = 'LIKE' | 'DISLIKE' | 'SUPER_LIKE';
