@@ -1,7 +1,19 @@
 // Mirror of Prisma enums for use in the mobile app
 
-export type Gender = 'MALE' | 'FEMALE' | 'NON_BINARY' | 'OTHER';
-export type RelationshipGoal = 'CASUAL' | 'SERIOUS' | 'FRIENDSHIP' | 'UNDECIDED';
+export type Gender =
+  | 'MALE'
+  | 'FEMALE'
+  | 'NON_BINARY'
+  | 'SELF_DESCRIBE'
+  | 'PREFER_NOT_TO_SAY'
+  | 'OTHER';
+export type RelationshipGoal =
+  | 'LONG_TERM'
+  | 'SERIOUS_OPEN_TO_SHORT_TERM'
+  | 'CASUAL'
+  | 'SERIOUS'
+  | 'FRIENDSHIP'
+  | 'UNDECIDED';
 export type SwipeAction = 'LIKE' | 'DISLIKE' | 'SUPER_LIKE';
 export type MessageType = 'TEXT' | 'IMAGE' | 'GIF';
 export type ReportStatus = 'PENDING' | 'REVIEWED' | 'RESOLVED' | 'DISMISSED';
@@ -24,16 +36,42 @@ export interface Profile {
   id: string;
   userId: string;
   height?: number;
+  pronouns?: string;
+  sexualOrientation?: string;
+  sexualOrientationVisible?: boolean;
   education?: string;
+  educationLevel?: string;
   jobTitle?: string;
   company?: string;
+  companyVisible?: boolean;
+  languages?: string[];
+  hometown?: string;
   relationshipGoal?: RelationshipGoal;
   drinking?: string;
   smoking?: string;
+  exercise?: string;
+  dietary?: string;
+  drugs?: string;
+  pets?: string;
+  sleepHabit?: string;
+  socialHabit?: string;
+  children?: string;
+  wantsChildren?: string;
+  relationshipStyle?: string;
+  communicationStyle?: string;
+  idealFirstDate?: string;
+  interests?: string[];
+  weekend?: string;
+  favorites?: string;
   mbti?: string;
   constellation?: string;
+  prompt1Question?: string;
   prompt1?: string;
+  prompt2Question?: string;
   prompt2?: string;
+  prompt3Question?: string;
+  prompt3?: string;
+  hiddenFields?: string[];
 }
 
 export interface Photo {

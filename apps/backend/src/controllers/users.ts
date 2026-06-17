@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { sanitizePublicProfile } from '../lib/publicProfile';
 
 function calculateAge(birthday: Date): number {
   const today = new Date();
@@ -13,7 +14,12 @@ function calculateAge(birthday: Date): number {
 
 export async function getUserById(req: Request, res: Response) {
   try {
-    const { id } = req.params;
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+
+    if (!id) {
+      res.status(400).json({ error: 'User id is required' });
+      return;
+    }
 
     const user = await prisma.user.findUnique({
       where: { id },
@@ -36,8 +42,14 @@ export async function getUserById(req: Request, res: Response) {
       return;
     }
 
-    const { birthday, ...rest } = user;
-    res.json({ user: { ...rest, age: calculateAge(birthday) } });
+    const { birthday, profile, ...rest } = user;
+    res.json({
+      user: {
+        ...rest,
+        profile: sanitizePublicProfile(profile),
+        age: calculateAge(birthday),
+      },
+    });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -1,7 +1,13 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
-import { getMyProfile, type AppProfile, type AppUser } from '@/lib/api';
+import {
+  getMyPhotos,
+  getMyProfile,
+  syncAuthUser,
+  type AppProfile,
+  type AppUser,
+} from '@/lib/api';
 
 type AuthContextType = {
   session: Session | null;
@@ -21,18 +27,19 @@ const AuthContext = createContext<AuthContextType>({
   markProfileComplete: async () => false,
 });
 
-function hasCompleteProfile(user: Omit<AppUser, 'profile'>, profile: AppProfile | null) {
+function hasCompleteProfile(
+  user: Omit<AppUser, 'profile'>,
+  profile: AppProfile | null,
+  photoCount: number
+) {
   return Boolean(
-    user.city?.trim() &&
+    user.name?.trim() &&
+      user.birthday &&
+      user.gender &&
+      user.city?.trim() &&
       user.bio?.trim() &&
-      profile?.height &&
-      profile.height >= 120 &&
-      profile.height <= 230 &&
-      profile.education?.trim() &&
-      profile.jobTitle?.trim() &&
-      profile.relationshipGoal &&
-      profile.prompt1?.trim() &&
-      profile.prompt2?.trim()
+      profile?.relationshipGoal &&
+      photoCount >= 2
   );
 }
 
@@ -80,8 +87,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let complete = false;
 
       try {
-        const { user, profile } = await getMyProfile(session.access_token);
-        complete = hasCompleteProfile(user, profile);
+        try {
+          await syncAuthUser(session.access_token);
+        } catch {
+          // Existing users can still evaluate completeness from current profile data.
+        }
+
+        const [{ user, profile }, photos] = await Promise.all([
+          getMyProfile(session.access_token),
+          getMyPhotos(session.access_token).catch(() => []),
+        ]);
+        complete = hasCompleteProfile(user, profile, photos.length);
       } catch {
         complete = false;
       }
@@ -106,8 +122,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const { user, profile } = await getMyProfile(session.access_token);
-      const complete = hasCompleteProfile(user, profile);
+      try {
+        await syncAuthUser(session.access_token);
+      } catch {
+        // Keep refresh working even if sync endpoint fails for older records.
+      }
+
+      const [{ user, profile }, photos] = await Promise.all([
+        getMyProfile(session.access_token),
+        getMyPhotos(session.access_token).catch(() => []),
+      ]);
+      const complete = hasCompleteProfile(user, profile, photos.length);
       setProfileComplete(complete);
       return complete;
     } catch {

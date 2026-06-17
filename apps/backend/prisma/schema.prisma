@@ -38,20 +38,46 @@ model User {
 }
 
 model Profile {
-  id               String            @id @default(uuid())
-  userId           String            @unique @map("user_id")
-  height           Int?
-  education        String?
-  jobTitle         String?           @map("job_title")
-  company          String?
-  relationshipGoal RelationshipGoal? @map("relationship_goal")
-  drinking         String?
-  smoking          String?
-  mbti             String?
-  constellation    String?
-  prompt1          String?           @map("prompt_1")
-  prompt2          String?           @map("prompt_2")
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                       String            @id @default(uuid())
+  userId                   String            @unique @map("user_id")
+  height                   Int?
+  pronouns                 String?
+  sexualOrientation        String?           @map("sexual_orientation")
+  sexualOrientationVisible Boolean           @default(false) @map("sexual_orientation_visible")
+  education                String?
+  educationLevel           String?           @map("education_level")
+  jobTitle                 String?           @map("job_title")
+  company                  String?
+  companyVisible           Boolean           @default(false) @map("company_visible")
+  languages                String[]          @default([])
+  hometown                 String?
+  relationshipGoal         RelationshipGoal? @map("relationship_goal")
+  drinking                 String?
+  smoking                  String?
+  exercise                 String?
+  dietary                  String?
+  drugs                    String?
+  pets                     String?
+  sleepHabit               String?           @map("sleep_habit")
+  socialHabit              String?           @map("social_habit")
+  children                 String?
+  wantsChildren            String?           @map("wants_children")
+  relationshipStyle        String?           @map("relationship_style")
+  communicationStyle       String?           @map("communication_style")
+  idealFirstDate           String?           @map("ideal_first_date")
+  interests                String[]          @default([])
+  weekend                  String?
+  favorites                String?
+  mbti                     String?
+  constellation            String?
+  prompt1Question          String?           @map("prompt_1_question")
+  prompt1                  String?           @map("prompt_1")
+  prompt2Question          String?           @map("prompt_2_question")
+  prompt2                  String?           @map("prompt_2")
+  prompt3Question          String?           @map("prompt_3_question")
+  prompt3                  String?           @map("prompt_3")
+  hiddenFields             String[]          @default([]) @map("hidden_fields")
+  user                     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
@@ -178,10 +204,14 @@ enum Gender {
   MALE
   FEMALE
   NON_BINARY
+  SELF_DESCRIBE
+  PREFER_NOT_TO_SAY
   OTHER
 }
 
 enum RelationshipGoal {
+  LONG_TERM
+  SERIOUS_OPEN_TO_SHORT_TERM
   CASUAL
   SERIOUS
   FRIENDSHIP
