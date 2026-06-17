@@ -433,7 +433,7 @@ export default function CompleteProfileScreen() {
     try {
       try {
         await syncAuthUser(accessToken);
-      } catch {
+      } catch (_) {
         // Existing accounts can still save profile if sync endpoint is temporarily unavailable.
       }
 
