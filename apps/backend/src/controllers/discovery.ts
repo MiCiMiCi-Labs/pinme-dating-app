@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { sanitizePublicProfile } from '../lib/publicProfile';
 
 function calculateAge(birthday: Date): number {
   const today = new Date();
@@ -154,7 +155,7 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         distanceKm: candidate.privacySettings?.showDistance
           ? fuzzyDistance(distanceKm)
           : null,
-        profile: candidate.profile,
+        profile: sanitizePublicProfile(candidate.profile),
         photos: candidate.photos,
       }));
 

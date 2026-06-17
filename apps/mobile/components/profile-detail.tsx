@@ -11,17 +11,14 @@ export function PhotoCarousel({ photos, height }: { photos: Photo[]; height: num
   const [index, setIndex] = useState(0);
   const indexRef = useRef(0);
 
-  const handleTap = (side: 'left' | 'right') => {
-    const total = photos.length;
-    if (total <= 1) return;
-    const next = side === 'right'
-      ? Math.min(indexRef.current + 1, total - 1)
-      : Math.max(indexRef.current - 1, 0);
-    indexRef.current = next;
-    setIndex(next);
-  };
-
-  const current = photos[index];
+  const primaryPhoto = user ? (user.photos.find(p => p.isPrimary) ?? user.photos[0]) : null;
+  const galleryPhotos = user ? user.photos.slice(0, 5) : [];
+  const profile = user?.profile;
+  const prompts = [
+    { question: profile?.prompt1Question ?? 'A little more about me', answer: profile?.prompt1 },
+    { question: profile?.prompt2Question ?? 'You should know', answer: profile?.prompt2 },
+    { question: profile?.prompt3Question ?? 'Message me if', answer: profile?.prompt3 },
+  ].filter((prompt) => prompt.answer?.trim());
 
   return (
     <View style={{ height }}>
@@ -115,17 +112,95 @@ export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user:
           </>
         ) : null}
 
-        {p?.prompt1 ? (
+        {profile ? (
           <>
-            <Text style={styles.sectionTitle}>A perfect weekend is…</Text>
-            <Text style={styles.bodyText}>{p.prompt1}</Text>
+            <Text style={styles.sectionTitle}>Details</Text>
+            <View style={styles.infoGrid}>
+              <InfoPill label="Pronouns" value={profile.pronouns} />
+              <InfoPill label="Orientation" value={profile.sexualOrientation} />
+              <InfoPill label="Height" value={profile.height ? `${profile.height} cm` : null} />
+              <InfoPill label="Job" value={profile.jobTitle} />
+              <InfoPill label="Company" value={profile.company} />
+              <InfoPill label="Education" value={profile.educationLevel ?? profile.education} />
+              <InfoPill label="Hometown" value={profile.hometown} />
+              <InfoPill label="Star sign" value={profile.constellation} />
+              <InfoPill label="MBTI" value={profile.mbti} />
+            </View>
+
+            <Text style={styles.sectionTitle}>Lifestyle</Text>
+            <View style={styles.infoGrid}>
+              <InfoPill label="Smoking" value={profile.smoking} />
+              <InfoPill label="Drinking" value={profile.drinking} />
+              <InfoPill label="Exercise" value={profile.exercise} />
+              <InfoPill label="Diet" value={profile.dietary} />
+              <InfoPill label="Drugs" value={profile.drugs} />
+              <InfoPill label="Pets" value={profile.pets} />
+              <InfoPill label="Sleep" value={profile.sleepHabit} />
+              <InfoPill label="Social" value={profile.socialHabit} />
+            </View>
+
+            <Text style={styles.sectionTitle}>Relationship and future</Text>
+            <View style={styles.infoGrid}>
+              <InfoPill label="Children" value={profile.children} />
+              <InfoPill label="Wants children" value={profile.wantsChildren} />
+              <InfoPill label="Relationship style" value={profile.relationshipStyle} />
+              <InfoPill label="Communication" value={profile.communicationStyle} />
+            </View>
           </>
         ) : null}
 
-        {p?.prompt2 ? (
+        {profile?.idealFirstDate ? (
           <>
-            <Text style={styles.sectionTitle}>I get along best with…</Text>
-            <Text style={styles.bodyText}>{p.prompt2}</Text>
+            <Text style={styles.sectionTitle}>Ideal first date</Text>
+            <Text style={styles.bodyText}>{profile.idealFirstDate}</Text>
+          </>
+        ) : null}
+
+        {profile?.interests?.length ? (
+          <>
+            <Text style={styles.sectionTitle}>Interests</Text>
+            <View style={styles.chipRow}>
+              {profile.interests.map((interest) => (
+                <Text key={interest} style={styles.chip}>{interest}</Text>
+              ))}
+            </View>
+          </>
+        ) : null}
+
+        {profile?.languages?.length ? (
+          <>
+            <Text style={styles.sectionTitle}>Languages</Text>
+            <View style={styles.chipRow}>
+              {profile.languages.map((language) => (
+                <Text key={language} style={styles.chip}>{language}</Text>
+              ))}
+            </View>
+          </>
+        ) : null}
+
+        {profile?.weekend ? (
+          <>
+            <Text style={styles.sectionTitle}>Ideal weekend</Text>
+            <Text style={styles.bodyText}>{profile.weekend}</Text>
+          </>
+        ) : null}
+
+        {profile?.favorites ? (
+          <>
+            <Text style={styles.sectionTitle}>Favorites</Text>
+            <Text style={styles.bodyText}>{profile.favorites}</Text>
+          </>
+        ) : null}
+
+        {prompts.length ? (
+          <>
+            <Text style={styles.sectionTitle}>Prompts</Text>
+            {prompts.map((prompt) => (
+              <View key={prompt.question} style={styles.promptCard}>
+                <Text style={styles.promptQuestion}>{prompt.question}</Text>
+                <Text style={styles.bodyText}>{prompt.answer}</Text>
+              </View>
+            ))}
           </>
         ) : null}
       </View>
@@ -142,6 +217,17 @@ export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user:
         </Pressable>
       </View>
     </>
+  );
+}
+
+function InfoPill({ label, value }: { label: string; value?: string | number | null }) {
+  if (value == null || value === '') return null;
+
+  return (
+    <View style={styles.infoPill}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={styles.infoValue}>{value}</Text>
+    </View>
   );
 }
 
@@ -244,4 +330,40 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   bodyText: { color: colors.muted, fontSize: 14, lineHeight: 22 },
+  infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  infoPill: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  infoLabel: { color: colors.muted, fontSize: 11, fontWeight: '800' },
+  infoValue: { color: colors.text, fontSize: 13, fontWeight: '900', marginTop: 3 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '800',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  promptCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 14,
+    marginBottom: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  promptQuestion: { color: colors.text, fontSize: 14, fontWeight: '900', marginBottom: 6 },
+  gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  galleryImage: { width: '30.6%', aspectRatio: 1, borderRadius: 6, overflow: 'hidden' },
+  galleryImageLarge: { width: '48%', aspectRatio: 0.78 },
+  fillImage: { width: '100%', height: '100%' },
 });

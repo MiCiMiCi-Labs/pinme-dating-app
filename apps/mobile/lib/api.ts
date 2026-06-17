@@ -4,26 +4,65 @@ const API_BASE_URL = apiUrl.replace(/\/$/, '');
 
 type SyncUserInput = {
   name?: string;
-  gender?: 'MALE' | 'FEMALE' | 'NON_BINARY' | 'OTHER';
+  gender?: Gender;
   birthday?: string;
 };
 
-export type RelationshipGoal = 'CASUAL' | 'SERIOUS' | 'FRIENDSHIP' | 'UNDECIDED';
+export type Gender =
+  | 'MALE'
+  | 'FEMALE'
+  | 'NON_BINARY'
+  | 'SELF_DESCRIBE'
+  | 'PREFER_NOT_TO_SAY'
+  | 'OTHER';
+export type RelationshipGoal =
+  | 'LONG_TERM'
+  | 'SERIOUS_OPEN_TO_SHORT_TERM'
+  | 'CASUAL'
+  | 'SERIOUS'
+  | 'FRIENDSHIP'
+  | 'UNDECIDED';
 
 export type AppProfile = {
   id: string;
   userId: string;
   height: number | null;
+  pronouns: string | null;
+  sexualOrientation: string | null;
+  sexualOrientationVisible: boolean;
   education: string | null;
+  educationLevel: string | null;
   jobTitle: string | null;
   company: string | null;
+  companyVisible: boolean;
+  languages: string[];
+  hometown: string | null;
   relationshipGoal: RelationshipGoal | null;
   drinking: string | null;
   smoking: string | null;
+  exercise: string | null;
+  dietary: string | null;
+  drugs: string | null;
+  pets: string | null;
+  sleepHabit: string | null;
+  socialHabit: string | null;
+  children: string | null;
+  wantsChildren: string | null;
+  relationshipStyle: string | null;
+  communicationStyle: string | null;
+  idealFirstDate: string | null;
+  interests: string[];
+  weekend: string | null;
+  favorites: string | null;
   mbti: string | null;
   constellation: string | null;
+  prompt1Question: string | null;
   prompt1: string | null;
+  prompt2Question: string | null;
   prompt2: string | null;
+  prompt3Question: string | null;
+  prompt3: string | null;
+  hiddenFields: string[];
 };
 
 export type AppUser = {
@@ -38,19 +77,74 @@ export type AppUser = {
 };
 
 export type ProfileUpdateInput = {
+  name?: string;
+  gender?: Gender;
+  birthday?: string;
   city?: string | null;
   bio?: string | null;
   height?: number | null;
+  pronouns?: string | null;
+  sexualOrientation?: string | null;
+  sexualOrientationVisible?: boolean;
   education?: string | null;
+  educationLevel?: string | null;
   jobTitle?: string | null;
   company?: string | null;
+  companyVisible?: boolean;
+  languages?: string[];
+  hometown?: string | null;
   relationshipGoal?: RelationshipGoal | null;
   drinking?: string | null;
   smoking?: string | null;
+  exercise?: string | null;
+  dietary?: string | null;
+  drugs?: string | null;
+  pets?: string | null;
+  sleepHabit?: string | null;
+  socialHabit?: string | null;
+  children?: string | null;
+  wantsChildren?: string | null;
+  relationshipStyle?: string | null;
+  communicationStyle?: string | null;
+  idealFirstDate?: string | null;
+  interests?: string[];
+  weekend?: string | null;
+  favorites?: string | null;
   mbti?: string | null;
   constellation?: string | null;
+  prompt1Question?: string | null;
   prompt1?: string | null;
+  prompt2Question?: string | null;
   prompt2?: string | null;
+  prompt3Question?: string | null;
+  prompt3?: string | null;
+  hiddenFields?: string[];
+};
+
+export type Preference = {
+  id: string;
+  userId: string;
+  preferredGender: Gender | null;
+  minAge: number | null;
+  maxAge: number | null;
+  maxDistanceKm: number | null;
+  minHeight: number | null;
+  maxHeight: number | null;
+};
+
+export type PreferenceUpdateInput = {
+  preferredGender?: Gender | null;
+  minAge?: number | null;
+  maxAge?: number | null;
+  maxDistanceKm?: number | null;
+  minHeight?: number | null;
+  maxHeight?: number | null;
+};
+
+export type LocationUpdateInput = {
+  latitude: number;
+  longitude: number;
+  city?: string | null;
 };
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -116,66 +210,35 @@ export async function updateMyProfileData(accessToken: string, data: ProfileUpda
   return parseResponse<{ message: string; user: Omit<AppUser, 'profile'>; profile: AppProfile }>(response);
 }
 
-// ─── Preferences ───────────────────────────────────────────────────────────
-
-export type Preferences = {
-  preferredGender: 'MALE' | 'FEMALE' | 'NON_BINARY' | 'OTHER' | null;
-  minAge: number | null;
-  maxAge: number | null;
-  maxDistanceKm: number | null;
-  minHeight: number | null;
-  maxHeight: number | null;
-};
-
-export async function getMyPreferences(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/preferences/me`, {
-    headers: authHeaders(accessToken),
-  });
-  return parseResponse<{ preferences: Preferences | null }>(response);
-}
-
-export async function updateMyPreferences(accessToken: string, data: Partial<Preferences>) {
+export async function updateMyPreferences(accessToken: string, data: PreferenceUpdateInput) {
   const response = await fetch(`${API_BASE_URL}/api/v1/preferences/me`, {
     method: 'PUT',
-    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(data),
   });
-  return parseResponse<{ preferences: Preferences }>(response);
+  return parseResponse<{ message: string; preferences: Preference }>(response);
 }
 
-// ─── Location ──────────────────────────────────────────────────────────────
-
-export async function updateLocation(accessToken: string, latitude: number, longitude: number, city?: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/location`, {
+export async function updateMyLocation(accessToken: string, data: LocationUpdateInput) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/location/me`, {
     method: 'PUT',
-    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ latitude, longitude, city }),
-  });
-  return parseResponse<{ latitude: number; longitude: number; city: string | null }>(response);
-}
-
-// ─── Privacy ───────────────────────────────────────────────────────────────
-
-export type PrivacySettings = {
-  discoverable: boolean;
-  showDistance: boolean;
-  showOnlineStatus: boolean;
-};
-
-export async function getPrivacySettings(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/privacy/me`, {
-    headers: authHeaders(accessToken),
-  });
-  return parseResponse<PrivacySettings>(response);
-}
-
-export async function updatePrivacySettings(accessToken: string, data: Partial<PrivacySettings>) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/privacy/me`, {
-    method: 'PUT',
-    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(data),
   });
-  return parseResponse<PrivacySettings>(response);
+  return parseResponse<{
+    id: string;
+    userId: string;
+    latitude: number;
+    longitude: number;
+    city: string | null;
+    updatedAt: string;
+  }>(response);
 }
 
 // ─── Photos ────────────────────────────────────────────────────────────────

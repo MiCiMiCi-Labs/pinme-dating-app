@@ -1,4 +1,4 @@
-import { RelationshipGoal } from '@prisma/client';
+import { Gender, RelationshipGoal } from '@prisma/client';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
@@ -6,21 +6,59 @@ import { prisma } from '../lib/prisma';
 const nullableString = (max: number) =>
   z.string().trim().max(max).nullable().optional();
 
+const optionalStringArray = z.array(z.string().trim().min(1).max(80)).max(20).optional();
+
+const birthdayString = z
+  .string()
+  .trim()
+  .refine((value) => !Number.isNaN(new Date(value).getTime()), {
+    message: 'birthday must be a valid date',
+  });
+
 const profileSchema = z
   .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    gender: z.nativeEnum(Gender).optional(),
+    birthday: birthdayString.optional(),
     city: nullableString(120),
     bio: nullableString(500),
     height: z.number().int().min(90).max(250).nullable().optional(),
+    pronouns: nullableString(80),
+    sexualOrientation: nullableString(120),
+    sexualOrientationVisible: z.boolean().optional(),
     education: nullableString(120),
+    educationLevel: nullableString(120),
     jobTitle: nullableString(120),
     company: nullableString(120),
+    companyVisible: z.boolean().optional(),
+    languages: optionalStringArray,
+    hometown: nullableString(120),
     relationshipGoal: z.nativeEnum(RelationshipGoal).nullable().optional(),
     drinking: nullableString(60),
     smoking: nullableString(60),
+    exercise: nullableString(80),
+    dietary: nullableString(80),
+    drugs: nullableString(80),
+    pets: nullableString(80),
+    sleepHabit: nullableString(80),
+    socialHabit: nullableString(80),
+    children: nullableString(80),
+    wantsChildren: nullableString(80),
+    relationshipStyle: nullableString(120),
+    communicationStyle: nullableString(120),
+    idealFirstDate: nullableString(500),
+    interests: optionalStringArray,
+    weekend: nullableString(500),
+    favorites: nullableString(500),
     mbti: nullableString(20),
     constellation: nullableString(40),
+    prompt1Question: nullableString(160),
     prompt1: nullableString(500),
+    prompt2Question: nullableString(160),
     prompt2: nullableString(500),
+    prompt3Question: nullableString(160),
+    prompt3: nullableString(500),
+    hiddenFields: z.array(z.string().trim().min(1).max(80)).max(40).optional(),
   })
   .strict();
 
@@ -96,12 +134,15 @@ export async function updateMyProfile(req: Request, res: Response) {
       return;
     }
 
-    const { city, bio, ...profileData } = parsedBody.data;
+    const { name, gender, birthday, city, bio, ...profileData } = parsedBody.data;
 
     const [updatedUser, profile] = await prisma.$transaction([
       prisma.user.update({
         where: { id: user.id },
         data: {
+          ...(name !== undefined ? { name } : {}),
+          ...(gender !== undefined ? { gender } : {}),
+          ...(birthday !== undefined ? { birthday: new Date(birthday) } : {}),
           ...(city !== undefined ? { city } : {}),
           ...(bio !== undefined ? { bio } : {}),
         },
