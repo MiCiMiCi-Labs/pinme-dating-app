@@ -88,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         try {
-          await syncAuthUser(session.access_token);
+          await syncAuthUser(session.access_token, { createIfMissing: false });
         } catch {
           // Existing users can still evaluate completeness from current profile data.
         }
@@ -123,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       try {
-        await syncAuthUser(session.access_token);
+        await syncAuthUser(session.access_token, { createIfMissing: false });
       } catch {
         // Keep refresh working even if sync endpoint fails for older records.
       }

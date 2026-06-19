@@ -6,6 +6,7 @@ type SyncUserInput = {
   name?: string;
   gender?: Gender;
   birthday?: string;
+  createIfMissing?: boolean;
 };
 
 export type Gender =
@@ -67,7 +68,8 @@ export type AppProfile = {
 
 export type AppUser = {
   id: string;
-  email: string;
+  email: string | null;
+  phone: string | null;
   name: string;
   gender: string;
   birthday: string;

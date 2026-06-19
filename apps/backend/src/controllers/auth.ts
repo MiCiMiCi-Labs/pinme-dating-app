@@ -60,10 +60,13 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
-    if (!authUser.email) {
-      res
-        .status(400)
-        .json({ message: 'Authenticated user does not have an email address' });
+    const authEmail = authUser.email ?? null;
+    const authPhone = authUser.phone ?? null;
+
+    if (!authEmail && !authPhone) {
+      res.status(400).json({
+        message: 'Authenticated user does not have an email address or phone number',
+      });
       return;
     }
 
@@ -72,16 +75,24 @@ export async function syncCurrentUser(req: Request, res: Response) {
         where: { supabaseAuthId: authUser.id },
         include: { profile: true },
       })) ??
-      (await prisma.user.findUnique({
-        where: { email: authUser.email },
-        include: { profile: true },
-      }));
+      (authEmail
+        ? await prisma.user.findUnique({
+            where: { email: authEmail },
+            include: { profile: true },
+          })
+        : null) ??
+      (authPhone
+        ? await prisma.user.findUnique({
+            where: { phone: authPhone },
+            include: { profile: true },
+          })
+        : null);
 
     if (existingUser) {
       const [user] = await prisma.$transaction([
         prisma.user.update({
           where: { id: existingUser.id },
-          data: { supabaseAuthId: authUser.id, email: authUser.email },
+          data: { supabaseAuthId: authUser.id, email: authEmail, phone: authPhone },
           include: { profile: true },
         }),
         prisma.privacySettings.upsert({
@@ -94,6 +105,13 @@ export async function syncCurrentUser(req: Request, res: Response) {
       res.status(200).json({
         message: 'User synced successfully',
         user,
+      });
+      return;
+    }
+
+    if (req.body.createIfMissing === false) {
+      res.status(404).json({
+        message: 'App user not found. Complete profile first.',
       });
       return;
     }
@@ -134,7 +152,8 @@ export async function syncCurrentUser(req: Request, res: Response) {
     const user = await prisma.user.create({
       data: {
         supabaseAuthId: authUser.id,
-        email: authUser.email,
+        email: authEmail,
+        phone: authPhone,
         name: name.trim(),
         gender: gender as Gender,
         birthday: parsedBirthday as Date,

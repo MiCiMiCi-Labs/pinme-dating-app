@@ -20,7 +20,8 @@ export type ReportStatus = 'PENDING' | 'REVIEWED' | 'RESOLVED' | 'DISMISSED';
 
 export interface User {
   id: string;
-  email: string;
+  email: string | null;
+  phone: string | null;
   name: string;
   gender: Gender;
   birthday: string;

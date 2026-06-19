@@ -156,7 +156,7 @@ export default function CompleteProfileScreen() {
     async function loadExistingProfile() {
       try {
         try {
-          await syncAuthUser(token);
+          await syncAuthUser(token, { createIfMissing: false });
         } catch {
           // Existing accounts may already be synced; do not block loading profile/photos.
         }
@@ -432,7 +432,11 @@ export default function CompleteProfileScreen() {
 
     try {
       try {
-        await syncAuthUser(accessToken);
+        await syncAuthUser(accessToken, {
+          name: form.name.trim(),
+          birthday: birthdayIso,
+          gender: form.gender,
+        });
       } catch {
         // Existing accounts can still save profile if sync endpoint is temporarily unavailable.
       }
