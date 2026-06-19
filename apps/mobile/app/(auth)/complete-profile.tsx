@@ -35,6 +35,7 @@ import {
   type Gender,
   type RelationshipGoal,
 } from '@/lib/api';
+import { createPhotoThumbnail } from '@/lib/photos';
 import { searchCities, type CitySuggestion } from '@/lib/places';
 
 type StepId = 'basics' | 'interested' | 'goal' | 'photos' | 'city' | 'bio';
@@ -467,7 +468,8 @@ export default function CompleteProfileScreen() {
       );
 
       for (const photo of localPhotos) {
-        await uploadPhoto(accessToken, photo.uri, photo.mimeType);
+        const thumbnail = await createPhotoThumbnail(photo.uri);
+        await uploadPhoto(accessToken, photo.uri, photo.mimeType, thumbnail);
       }
 
       const complete = await markProfileComplete();

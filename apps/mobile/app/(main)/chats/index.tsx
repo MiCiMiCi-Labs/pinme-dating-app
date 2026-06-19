@@ -14,10 +14,12 @@ import {
 import { ChatPreviewRow } from '@/components/cards';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import { getChatMatches, type ChatMatch } from '@/lib/api';
+import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
 
 function getPrimaryPhoto(match: ChatMatch) {
-  return (match.user.photos.find(photo => photo.isPrimary) ?? match.user.photos[0])?.url ?? photos.redhead;
+  const primary = match.user.photos.find(photo => photo.isPrimary) ?? match.user.photos[0];
+  return primary ? getDisplayPhotoUrl(primary, 'thumbnail') : photos.redhead;
 }
 
 function formatRelativeTime(value: string) {

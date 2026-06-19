@@ -15,6 +15,7 @@ import {
   type Preferences,
   type PrivacySettings,
 } from '@/lib/api';
+import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
 
 export function DiscoverCard({
@@ -36,6 +37,7 @@ export function DiscoverCard({
   const photoIndexRef = useRef(0);
 
   const currentPhoto = sortedPhotos[photoIndex];
+  const currentPhotoUrl = currentPhoto ? getDisplayPhotoUrl(currentPhoto, 'thumbnail') : '';
 
   const rotate = pan.x.interpolate({
     inputRange: [-200, 0, 200],
@@ -74,8 +76,8 @@ export function DiscoverCard({
         { transform: [{ translateX: pan.x }, { translateY: pan.y }, { rotate }] },
       ]}
     >
-      {currentPhoto ? (
-        <Image source={{ uri: currentPhoto.url }} style={styles.cardImage} contentFit="cover" />
+      {currentPhotoUrl ? (
+        <Image source={{ uri: currentPhotoUrl }} style={styles.cardImage} contentFit="cover" />
       ) : null}
 
       {/* tap zones for photo navigation */}
@@ -344,7 +346,8 @@ export function MatchOverlay({
   onKeepSwiping: () => void;
   onSayHello: () => void;
 }) {
-  const matchedPhoto = (matchedUser.photos.find(p => p.isPrimary) ?? matchedUser.photos[0])?.url ?? '';
+  const primaryMatchedPhoto = matchedUser.photos.find(p => p.isPrimary) ?? matchedUser.photos[0];
+  const matchedPhoto = primaryMatchedPhoto ? getDisplayPhotoUrl(primaryMatchedPhoto, 'thumbnail') : '';
 
   return (
     <View style={styles.matchOverlay}>

@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { deletePhoto, getMyPhotos, setPrimaryPhoto, uploadPhoto, type Photo } from '@/lib/api';
+import { createPhotoThumbnail, getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
 import { colors, IconButton } from '@/design/system';
 
@@ -95,7 +96,9 @@ export default function PhotosScreen() {
 
     setUploadingSlot(slotIndex);
     try {
-      const photo = await uploadPhoto(token, asset.uri, asset.mimeType ?? 'image/jpeg');
+      const mimeType = asset.mimeType ?? 'image/jpeg';
+      const thumbnail = await createPhotoThumbnail(asset.uri);
+      const photo = await uploadPhoto(token, asset.uri, mimeType, thumbnail);
       setPhotos(prev => [...prev, photo]);
     } catch (err) {
       Alert.alert('Upload failed', err instanceof Error ? err.message : 'Please try again.');
@@ -179,7 +182,11 @@ export default function PhotosScreen() {
                 >
                   {photo ? (
                     <>
-                      <Image source={{ uri: photo.url }} style={styles.photo} contentFit="cover" />
+                    <Image
+                      source={{ uri: getDisplayPhotoUrl(photo, 'thumbnail') }}
+                      style={styles.photo}
+                      contentFit="cover"
+                    />
                       {isBusy && (
                         <View style={styles.overlay}>
                           <ActivityIndicator color="#FFFFFF" />

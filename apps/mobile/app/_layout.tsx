@@ -1,8 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { AuthProvider, useAuth } from '@/contexts/auth';
+import { colors } from '@/design/system';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -11,8 +13,8 @@ function RootNavigator() {
   const segments = useSegments();
 
   useEffect(() => {
-    if (!loading && !profileCompletionLoading) SplashScreen.hideAsync();
-  }, [loading, profileCompletionLoading]);
+    if (!loading) SplashScreen.hideAsync();
+  }, [loading]);
 
   useEffect(() => {
     if (loading || profileCompletionLoading) return;
@@ -42,7 +44,7 @@ function RootNavigator() {
     }
   }, [session, loading, profileComplete, profileCompletionLoading, segments]);
 
-  if (loading || profileCompletionLoading) return null;
+  if (loading || profileCompletionLoading) return <LoadingScreen />;
 
   return (
     <>
@@ -56,6 +58,40 @@ function RootNavigator() {
   );
 }
 
+function LoadingScreen() {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scale, {
+          toValue: 1.18,
+          duration: 520,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scale, {
+          toValue: 1,
+          duration: 520,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    animation.start();
+
+    return () => animation.stop();
+  }, [scale]);
+
+  return (
+    <View style={styles.loadingScreen}>
+      <Animated.Text style={[styles.loadingHeart, { transform: [{ scale }] }]}>♥</Animated.Text>
+      <Text style={styles.loadingText}>Loading...</Text>
+    </View>
+  );
+}
+
 export default function RootLayout() {
   return (
     <AuthProvider>
@@ -63,3 +99,23 @@ export default function RootLayout() {
     </AuthProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg,
+    gap: 14,
+  },
+  loadingHeart: {
+    color: colors.primary,
+    fontSize: 54,
+    lineHeight: 60,
+  },
+  loadingText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+});

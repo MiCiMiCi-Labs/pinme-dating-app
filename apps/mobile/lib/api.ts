@@ -134,6 +134,8 @@ export type Preference = {
   maxHeight: number | null;
 };
 
+export type Preferences = Preference;
+
 export type PreferenceUpdateInput = {
   preferredGender?: Gender | null;
   minAge?: number | null;
@@ -147,6 +149,21 @@ export type LocationUpdateInput = {
   latitude: number;
   longitude: number;
   city?: string | null;
+};
+
+export type PrivacySettings = {
+  id?: string;
+  userId?: string;
+  discoverable: boolean;
+  showDistance: boolean;
+  showOnlineStatus: boolean;
+  locationVisible?: boolean;
+};
+
+export type PrivacySettingsUpdateInput = {
+  discoverable?: boolean;
+  showDistance?: boolean;
+  showOnlineStatus?: boolean;
 };
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -224,6 +241,13 @@ export async function updateMyPreferences(accessToken: string, data: PreferenceU
   return parseResponse<{ message: string; preferences: Preference }>(response);
 }
 
+export async function getMyPreferences(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/preferences/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ preferences: Preference | null }>(response);
+}
+
 export async function updateMyLocation(accessToken: string, data: LocationUpdateInput) {
   const response = await fetch(`${API_BASE_URL}/api/v1/location/me`, {
     method: 'PUT',
@@ -243,11 +267,40 @@ export async function updateMyLocation(accessToken: string, data: LocationUpdate
   }>(response);
 }
 
+export async function updateLocation(
+  accessToken: string,
+  latitude: number,
+  longitude: number,
+  city?: string | null
+) {
+  return updateMyLocation(accessToken, { latitude, longitude, city });
+}
+
+export async function getPrivacySettings(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/privacy/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<PrivacySettings>(response);
+}
+
+export async function updatePrivacySettings(accessToken: string, data: PrivacySettingsUpdateInput) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/privacy/me`, {
+    method: 'PUT',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+  return parseResponse<PrivacySettings>(response);
+}
+
 // ─── Photos ────────────────────────────────────────────────────────────────
 
 export type Photo = {
   id: string;
   url: string;
+  thumbnailUrl: string | null;
   isPrimary: boolean;
   isVerified: boolean;
   orderIndex: number;
@@ -260,10 +313,27 @@ export async function getMyPhotos(accessToken: string) {
   return parseResponse<Photo[]>(response);
 }
 
-export async function uploadPhoto(accessToken: string, uri: string, mimeType: string) {
+export async function uploadPhoto(
+  accessToken: string,
+  uri: string,
+  mimeType: string,
+  thumbnail?: { uri: string; mimeType: string }
+) {
   const ext = mimeType.split('/')[1] ?? 'jpg';
   const formData = new FormData();
   formData.append('photo', { uri, name: `photo.${ext}`, type: mimeType } as unknown as Blob);
+
+  if (thumbnail) {
+    const thumbnailExt = thumbnail.mimeType.split('/')[1] ?? 'jpg';
+    formData.append(
+      'thumbnail',
+      {
+        uri: thumbnail.uri,
+        name: `thumbnail.${thumbnailExt}`,
+        type: thumbnail.mimeType,
+      } as unknown as Blob
+    );
+  }
 
   const response = await fetch(`${API_BASE_URL}/api/v1/photos`, {
     method: 'POST',

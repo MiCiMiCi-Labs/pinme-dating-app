@@ -23,8 +23,15 @@ router.use(requireAuth);
 // GET  /api/v1/photos/me
 router.get('/me', getMyPhotos);
 
-// POST /api/v1/photos  (multipart/form-data, field: "photo")
-router.post('/', upload.single('photo'), uploadPhoto);
+// POST /api/v1/photos  (multipart/form-data, fields: "photo" and optional "thumbnail")
+router.post(
+  '/',
+  upload.fields([
+    { name: 'photo', maxCount: 1 },
+    { name: 'thumbnail', maxCount: 1 },
+  ]),
+  uploadPhoto
+);
 
 // PATCH  /api/v1/photos/:photoId/primary
 router.patch('/:photoId/primary', setPrimaryPhoto);

@@ -2,6 +2,7 @@ import {
   RekognitionClient,
   DetectModerationLabelsCommand,
   DetectFacesCommand,
+  type ModerationLabel,
 } from '@aws-sdk/client-rekognition';
 
 const client = new RekognitionClient({
@@ -43,8 +44,8 @@ export async function checkContentModeration(
         MinConfidence: MODERATION_THRESHOLD,
       }),
     );
-    const blocked = (result.ModerationLabels ?? []).find(l =>
-      BLOCKED_LABELS.has(l.Name ?? ''),
+    const blocked = (result.ModerationLabels ?? []).find((label: ModerationLabel) =>
+      BLOCKED_LABELS.has(label.Name ?? ''),
     );
     if (blocked) return { passed: false, blockedLabel: blocked.Name };
     return { passed: true };

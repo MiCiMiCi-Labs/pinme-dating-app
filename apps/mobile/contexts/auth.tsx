@@ -2,9 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import {
-  getMyPhotos,
   getMyProfile,
-  syncAuthUser,
   type AppProfile,
   type AppUser,
 } from '@/lib/api';
@@ -29,8 +27,7 @@ const AuthContext = createContext<AuthContextType>({
 
 function hasCompleteProfile(
   user: Omit<AppUser, 'profile'>,
-  profile: AppProfile | null,
-  photoCount: number
+  profile: AppProfile | null
 ) {
   return Boolean(
     user.name?.trim() &&
@@ -38,8 +35,7 @@ function hasCompleteProfile(
       user.gender &&
       user.city?.trim() &&
       user.bio?.trim() &&
-      profile?.relationshipGoal &&
-      photoCount >= 2
+      profile?.relationshipGoal
   );
 }
 
@@ -87,18 +83,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let complete = false;
 
       try {
-        try {
-          await syncAuthUser(session.access_token, { createIfMissing: false });
-        } catch {
-          // Existing users can still evaluate completeness from current profile data.
-        }
-
-        const [{ user, profile }, photos] = await Promise.all([
-          getMyProfile(session.access_token),
-          getMyPhotos(session.access_token).catch(() => []),
-        ]);
-        complete = hasCompleteProfile(user, profile, photos.length);
-      } catch (_) {
+        const { user, profile } = await getMyProfile(session.access_token);
+        complete = hasCompleteProfile(user, profile);
+      } catch {
         complete = false;
       }
 
@@ -122,17 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      try {
-        await syncAuthUser(session.access_token, { createIfMissing: false });
-      } catch {
-        // Keep refresh working even if sync endpoint fails for older records.
-      }
-
-      const [{ user, profile }, photos] = await Promise.all([
-        getMyProfile(session.access_token),
-        getMyPhotos(session.access_token).catch(() => []),
-      ]);
-      const complete = hasCompleteProfile(user, profile, photos.length);
+      const { user, profile } = await getMyProfile(session.access_token);
+      const complete = hasCompleteProfile(user, profile);
       setProfileComplete(complete);
       return complete;
     } catch (_) {

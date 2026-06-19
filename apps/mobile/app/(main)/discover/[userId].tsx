@@ -4,13 +4,16 @@ import { ActivityIndicator, Alert, Animated, SafeAreaView, ScrollView, StyleShee
 import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
 import { colors } from '@/design/system';
 import { createSwipe, getUserById, type PublicUser } from '@/lib/api';
-import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/auth';
+import { getCachedDiscoveryUser } from '@/lib/discovery-cache';
+import { getDisplayPhotoUrl } from '@/lib/photos';
 import { markSwiped } from '@/lib/swipedUsers';
 
 export default function ProfileDetailScreen() {
   const { userId } = useLocalSearchParams<{ userId: string }>();
-  const [user, setUser] = useState<PublicUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { session } = useAuth();
+  const [user, setUser] = useState<PublicUser | null>(() => getCachedDiscoveryUser(userId));
+  const [loading, setLoading] = useState(!getCachedDiscoveryUser(userId));
   const [liked, setLiked] = useState(false);
   const [stamp, setStamp] = useState<'like' | 'nope' | null>(null);
   const stampOpacity = useRef(new Animated.Value(0)).current;
@@ -22,9 +25,7 @@ export default function ProfileDetailScreen() {
     let cancelled = false;
 
     async function load() {
-      if (!userId) return;
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
+      if (!userId || !session?.access_token) return;
       try {
         const { user: data } = await getUserById(session.access_token, userId);
         if (!cancelled) setUser(data);
@@ -37,7 +38,7 @@ export default function ProfileDetailScreen() {
 
     load();
     return () => { cancelled = true; };
-  }, [userId]);
+  }, [session?.access_token, userId]);
 
   const showStamp = (type: 'like' | 'nope', then: () => void) => {
     setStamp(type);
@@ -62,8 +63,7 @@ export default function ProfileDetailScreen() {
     markSwiped(user.id);
 
     const apiPromise = (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return null;
+      if (!session?.access_token) return null;
       try {
         return await createSwipe(session.access_token, user.id, 'LIKE');
       } catch (_) {
@@ -76,14 +76,15 @@ export default function ProfileDetailScreen() {
       if (!result) { router.back(); return; }
       const { match } = result;
       if (match) {
-        const primaryPhoto = (user.photos.find(p => p.isPrimary) ?? user.photos[0])?.url ?? '';
+        const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+        const primaryPhotoUrl = primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '';
         Alert.alert("It's a match! 🎉", `You and ${user.name} liked each other`, [
           { text: 'Keep browsing', onPress: () => router.back() },
           {
             text: 'Say hello',
             onPress: () => router.replace({
               pathname: '/(main)/chats/[matchId]',
-              params: { matchId: match.id, name: user.name, photoUrl: primaryPhoto },
+              params: { matchId: match.id, name: user.name, photoUrl: primaryPhotoUrl },
             }),
           },
         ]);
@@ -97,9 +98,9 @@ export default function ProfileDetailScreen() {
     if (!user) return;
     markSwiped(user.id);
     const uid = user.id;
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
-    });
+    if (session?.access_token) {
+      createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
+    }
     showStamp('nope', () => router.back());
   };
 
