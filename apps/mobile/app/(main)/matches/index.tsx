@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors, IconButton } from '@/design/system';
 import { getChatMatches, type ChatMatch } from '@/lib/api';
+import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
 
 export default function MatchesScreen() {
@@ -59,7 +60,8 @@ export default function MatchesScreen() {
             <Text style={styles.sectionTitle}>New matches</Text>
             <View style={styles.grid}>
               {matches.map(({ matchId, user }) => {
-                const primaryPhoto = (user.photos.find(p => p.isPrimary) ?? user.photos[0])?.url ?? '';
+                const primary = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+                const primaryPhoto = primary ? getDisplayPhotoUrl(primary, 'thumbnail') : '';
                 return (
                   <Pressable
                     key={matchId}

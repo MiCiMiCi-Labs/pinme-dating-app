@@ -4,16 +4,19 @@ import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimens
 import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
 import { createSwipe, getCurrentAppUser, getDiscoveryFeed, getMyPhotos, type DiscoveryUser } from '@/lib/api';
+import { useAuth } from '@/contexts/auth';
+import { cacheDiscoveryUsers } from '@/lib/discovery-cache';
 import {
   getDetailedProfileCompletion,
   matchingProfileCompletionThreshold,
 } from '@/lib/profileCompleteness';
-import { supabase } from '@/lib/supabase';
+import { getDisplayPhotoUrl } from '@/lib/photos';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 
 const SWIPE_THRESHOLD = 100;
 
 export default function SwipeScreen() {
+  const { session } = useAuth();
   const [users, setUsers] = useState<DiscoveryUser[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -35,9 +38,13 @@ export default function SwipeScreen() {
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
-  const loadFeed = useCallback(async (cancelled?: { current: boolean }) => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+  const loadFeed = useCallback(async (cancelled?: { current: boolean }, forceRefresh = false) => {
+    if (!session?.access_token) return;
+    if (hasLoadedRef.current && !forceRefresh) {
+      setLoading(false);
+      return;
+    }
+
     if (!hasLoadedRef.current) setLoading(true);
     try {
       const [{ user: appUser }, myPhotos] = await Promise.all([
@@ -56,7 +63,7 @@ export default function SwipeScreen() {
           setUsers([]);
           setCurrentIndex(0);
           const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-          setMyPhotoUrl(primary?.url ?? null);
+          setMyPhotoUrl(primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null);
           hasLoadedRef.current = true;
         }
         return;
@@ -65,11 +72,12 @@ export default function SwipeScreen() {
       const { users: feed } = await getDiscoveryFeed(session.access_token);
 
       if (!cancelled?.current) {
-        setUsers(feed);
+        cacheDiscoveryUsers(feed);
+        setUsers(filterSwiped(feed));
         setCurrentIndex(0);
         pan.setValue({ x: 0, y: 0 });
         const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-        setMyPhotoUrl(primary?.url ?? null);
+        setMyPhotoUrl(primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null);
         hasLoadedRef.current = true;
       }
     } catch (_) {
@@ -93,7 +101,8 @@ export default function SwipeScreen() {
 
   useEffect(() => {
     if (feedKey === 0) return;
-    loadFeed();
+    hasLoadedRef.current = false;
+    loadFeed(undefined, true);
   }, [feedKey, loadFeed]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
@@ -104,8 +113,7 @@ export default function SwipeScreen() {
 
     if (!user) return;
     markSwiped(user.id);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+    if (!session?.access_token) return;
 
     try {
       const { match } = await createSwipe(
@@ -120,7 +128,7 @@ export default function SwipeScreen() {
     } catch (_) {
       // non-blocking — card already advanced
     }
-  }, [pan]);
+  }, [pan, session?.access_token]);
 
   handleSwipeRef.current = handleSwipe;
 
@@ -245,7 +253,7 @@ export default function SwipeScreen() {
                 params: {
                   matchId: matchedMatchId,
                   name: matchedUser.name,
-                  photoUrl: primaryPhoto?.url ?? '',
+                  photoUrl: primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '',
                 },
               });
             } else {

@@ -70,29 +70,46 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
-    const existingUser =
-      (await prisma.user.findUnique({
+    const userByAuthId = await prisma.user.findUnique({
         where: { supabaseAuthId: authUser.id },
         include: { profile: true },
-      })) ??
-      (authEmail
-        ? await prisma.user.findUnique({
-            where: { email: authEmail },
-            include: { profile: true },
-          })
-        : null) ??
-      (authPhone
-        ? await prisma.user.findUnique({
-            where: { phone: authPhone },
-            include: { profile: true },
-          })
-        : null);
+      });
+
+    const userByEmail = authEmail
+      ? await prisma.user.findUnique({
+          where: { email: authEmail },
+          include: { profile: true },
+        })
+      : null;
+
+    const userByPhone = authPhone
+      ? await prisma.user.findUnique({
+          where: { phone: authPhone },
+          include: { profile: true },
+        })
+      : null;
+
+    const existingUser = userByAuthId ?? userByEmail ?? userByPhone;
 
     if (existingUser) {
+      const userUpdateData: {
+        supabaseAuthId: string;
+        email?: string | null;
+        phone?: string | null;
+      } = { supabaseAuthId: authUser.id };
+
+      if (authEmail && (!userByEmail || userByEmail.id === existingUser.id)) {
+        userUpdateData.email = authEmail;
+      }
+
+      if (authPhone && (!userByPhone || userByPhone.id === existingUser.id)) {
+        userUpdateData.phone = authPhone;
+      }
+
       const [user] = await prisma.$transaction([
         prisma.user.update({
           where: { id: existingUser.id },
-          data: { supabaseAuthId: authUser.id, email: authEmail, phone: authPhone },
+          data: userUpdateData,
           include: { profile: true },
         }),
         prisma.privacySettings.upsert({

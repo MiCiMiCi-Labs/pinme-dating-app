@@ -4,12 +4,29 @@ import { supabase } from '../lib/supabase';
 import { BUCKET, MAX_PHOTOS } from '../lib/storage';
 import { checkContentModeration, verifyFacePhoto } from '../lib/rekognition';
 
+type PhotoUploadFiles = {
+  photo?: Express.Multer.File[];
+  thumbnail?: Express.Multer.File[];
+};
+
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
     where: { supabaseAuthId },
     select: { id: true },
   });
   return user?.id ?? null;
+}
+
+function getUploadFile(req: Request, field: keyof PhotoUploadFiles) {
+  if (req.file && field === 'photo') return req.file;
+
+  const files = req.files as PhotoUploadFiles | undefined;
+  return files?.[field]?.[0] ?? null;
+}
+
+function getStoragePath(publicUrl: string | null | undefined) {
+  if (!publicUrl) return null;
+  return publicUrl.split(`/storage/v1/object/public/${BUCKET}/`)[1] ?? null;
 }
 
 export async function getMyPhotos(req: Request, res: Response) {
@@ -32,7 +49,10 @@ export async function getMyPhotos(req: Request, res: Response) {
 
 export async function uploadPhoto(req: Request, res: Response) {
   try {
-    if (!req.file) {
+    const originalFile = getUploadFile(req, 'photo');
+    const thumbnailFile = getUploadFile(req, 'thumbnail');
+
+    if (!originalFile) {
       res.status(400).json({ error: 'No file provided' });
       return;
     }
@@ -49,7 +69,7 @@ export async function uploadPhoto(req: Request, res: Response) {
       return;
     }
 
-    const modCheck = await checkContentModeration(req.file.buffer);
+    const modCheck = await checkContentModeration(originalFile.buffer);
     if (!modCheck.passed && modCheck.blockedLabel !== 'service_error') {
       res.status(400).json({ error: 'This photo violates our content policy.' });
       return;
@@ -60,7 +80,7 @@ export async function uploadPhoto(req: Request, res: Response) {
     let verifiedAt: Date | null = null;
 
     if (isFirstPhoto) {
-      const verification = await verifyFacePhoto(req.file.buffer);
+      const verification = await verifyFacePhoto(originalFile.buffer);
       if (!verification.passed && verification.reason !== 'service_error') {
         const reasonMessages: Record<string, string> = {
           no_face: 'Your primary photo must clearly show your face.',
@@ -78,13 +98,13 @@ export async function uploadPhoto(req: Request, res: Response) {
     }
 
     const photoId = crypto.randomUUID();
-    const ext = req.file.mimetype === 'image/jpeg' ? 'jpg' : req.file.mimetype.split('/')[1];
-    const storagePath = `${dbUserId}/${photoId}.${ext}`;
+    const originalExt = originalFile.mimetype === 'image/jpeg' ? 'jpg' : originalFile.mimetype.split('/')[1];
+    const storagePath = `${dbUserId}/original/${photoId}.${originalExt}`;
 
     const { error: uploadError } = await supabase.storage
       .from(BUCKET)
-      .upload(storagePath, req.file.buffer, {
-        contentType: req.file.mimetype,
+      .upload(storagePath, originalFile.buffer, {
+        contentType: originalFile.mimetype,
         upsert: false,
       });
 
@@ -94,12 +114,35 @@ export async function uploadPhoto(req: Request, res: Response) {
     }
 
     const { data: { publicUrl } } = supabase.storage.from(BUCKET).getPublicUrl(storagePath);
+    let thumbnailUrl = publicUrl;
+
+    if (thumbnailFile) {
+      const thumbnailExt = thumbnailFile.mimetype === 'image/jpeg' ? 'jpg' : thumbnailFile.mimetype.split('/')[1];
+      const thumbnailPath = `${dbUserId}/thumbnails/${photoId}.${thumbnailExt}`;
+
+      const { error: thumbnailUploadError } = await supabase.storage
+        .from(BUCKET)
+        .upload(thumbnailPath, thumbnailFile.buffer, {
+          contentType: thumbnailFile.mimetype,
+          upsert: false,
+        });
+
+      if (thumbnailUploadError) {
+        await supabase.storage.from(BUCKET).remove([storagePath]);
+        res.status(500).json({ error: 'Thumbnail upload failed', detail: thumbnailUploadError.message });
+        return;
+      }
+
+      const { data } = supabase.storage.from(BUCKET).getPublicUrl(thumbnailPath);
+      thumbnailUrl = data.publicUrl;
+    }
 
     const photo = await prisma.photo.create({
       data: {
         id: photoId,
         userId: dbUserId,
         url: publicUrl,
+        thumbnailUrl,
         orderIndex: count,
         isPrimary: isFirstPhoto,
         isVerified,
@@ -191,9 +234,11 @@ export async function deletePhoto(req: Request, res: Response) {
       return;
     }
 
-    const storagePath = photo.url.split(`/storage/v1/object/public/${BUCKET}/`)[1];
-    if (storagePath) {
-      await supabase.storage.from(BUCKET).remove([storagePath]);
+    const storagePaths = [getStoragePath(photo.url), getStoragePath(photo.thumbnailUrl)]
+      .filter((path): path is string => Boolean(path));
+
+    if (storagePaths.length > 0) {
+      await supabase.storage.from(BUCKET).remove([...new Set(storagePaths)]);
     }
 
     await prisma.photo.delete({ where: { id: photoId } });

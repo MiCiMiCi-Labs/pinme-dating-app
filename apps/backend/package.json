@@ -10,7 +10,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:seed": "ts-node prisma/seed.ts"
+    "db:seed": "ts-node prisma/seed.ts",
+    "photos:backfill-thumbnails": "ts-node src/scripts/backfillPhotoThumbnails.ts"
   },
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.1070.0",
@@ -22,6 +23,7 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.1.1",
+    "sharp": "^0.35.1",
     "ws": "^8.21.0",
     "zod": "^3.23.8"
   },

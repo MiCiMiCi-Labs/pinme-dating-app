@@ -16,6 +16,7 @@ import {
   getDetailedProfileCompletion,
   matchingProfileCompletionThreshold,
 } from '@/lib/profileCompleteness';
+import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
 
 type ProfileDraft = {
@@ -216,7 +217,9 @@ export default function MyProfileScreen() {
       ...photos.filter(p => !p.isPrimary),
     ];
     const slots: Array<string | null> = Array(6).fill(null);
-    sorted.forEach((p, i) => { if (i < 6) slots[i] = p.url; });
+    sorted.forEach((photo, index) => {
+      if (index < slots.length) slots[index] = getDisplayPhotoUrl(photo, 'thumbnail');
+    });
     return slots;
   }, [photos]);
 
