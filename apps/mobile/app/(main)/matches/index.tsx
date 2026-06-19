@@ -3,11 +3,11 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors, IconButton } from '@/design/system';
-import { getMatches, type Match } from '@/lib/api';
+import { getChatMatches, type ChatMatch } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 
 export default function MatchesScreen() {
-  const [matches, setMatches] = useState<Match[]>([]);
+  const [matches, setMatches] = useState<ChatMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const hasLoadedRef = useRef(false);
 
@@ -20,12 +20,12 @@ export default function MatchesScreen() {
         if (!session) return;
         if (!hasLoadedRef.current) setLoading(true);
         try {
-          const data = await getMatches(session.access_token);
+          const data = await getChatMatches(session.access_token);
           if (!cancelled) {
             setMatches(data);
             hasLoadedRef.current = true;
           }
-        } catch {
+        } catch (_) {
           // keep existing state
         } finally {
           if (!cancelled) {

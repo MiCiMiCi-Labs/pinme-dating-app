@@ -211,12 +211,19 @@ export default function MyProfileScreen() {
   const hasLoadedRef = useRef(false);
 
   const photoSlots = useMemo(() => {
+    const sorted = [
+      ...photos.filter(p => p.isPrimary),
+      ...photos.filter(p => !p.isPrimary),
+    ];
     const slots: Array<string | null> = Array(6).fill(null);
-    photos.forEach((photo, index) => {
-      if (index < slots.length) slots[index] = photo.url;
-    });
+    sorted.forEach((p, i) => { if (i < 6) slots[i] = p.url; });
     return slots;
   }, [photos]);
+
+  const primaryVerified = useMemo(
+    () => photos.find(p => p.isPrimary)?.isVerified ?? false,
+    [photos]
+  );
 
   const completion = useMemo(
     () => getDetailedProfileCompletion(user, photos),
@@ -462,7 +469,7 @@ export default function MyProfileScreen() {
           </Text>
         </View>
 
-        <PhotoUploadGrid photos={photoSlots} />
+        <PhotoUploadGrid photos={photoSlots} primaryVerified={primaryVerified} />
 
         <FormSection title="Account">
           <EditableField label="Name" value={user?.name ?? ''} />

@@ -1,9 +1,21 @@
-﻿import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+﻿import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { colors, PrimaryButton } from '@/design/system';
-import { type DiscoveryUser } from '@/lib/api';
+import {
+  getMyPreferences,
+  getPrivacySettings,
+  updateLocation,
+  updateMyPreferences,
+  updatePrivacySettings,
+  type DiscoveryUser,
+  type Preferences,
+  type PrivacySettings,
+} from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
 export function DiscoverCard({
   user,
@@ -16,8 +28,14 @@ export function DiscoverCard({
   pan: Animated.ValueXY;
   panHandlers: object;
 }) {
-  const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
-  const photoUrl = primaryPhoto?.url ?? '';
+  const sortedPhotos = [
+    ...user.photos.filter(p => p.isPrimary),
+    ...user.photos.filter(p => !p.isPrimary).sort((a, b) => a.orderIndex - b.orderIndex),
+  ];
+  const [photoIndex, setPhotoIndex] = useState(0);
+  const photoIndexRef = useRef(0);
+
+  const currentPhoto = sortedPhotos[photoIndex];
 
   const rotate = pan.x.interpolate({
     inputRange: [-200, 0, 200],
@@ -37,6 +55,16 @@ export function DiscoverCard({
     extrapolate: 'clamp',
   });
 
+  const handleTap = (side: 'left' | 'right') => {
+    const total = sortedPhotos.length;
+    if (total <= 1) return;
+    const next = side === 'right'
+      ? Math.min(photoIndexRef.current + 1, total - 1)
+      : Math.max(photoIndexRef.current - 1, 0);
+    photoIndexRef.current = next;
+    setPhotoIndex(next);
+  };
+
   return (
     <Animated.View
       {...panHandlers}
@@ -46,9 +74,29 @@ export function DiscoverCard({
         { transform: [{ translateX: pan.x }, { translateY: pan.y }, { rotate }] },
       ]}
     >
-      {photoUrl ? (
-        <Image source={{ uri: photoUrl }} style={styles.cardImage} contentFit="cover" />
+      {currentPhoto ? (
+        <Image source={{ uri: currentPhoto.url }} style={styles.cardImage} contentFit="cover" />
       ) : null}
+
+      {/* tap zones for photo navigation */}
+      {sortedPhotos.length > 1 && (
+        <View style={styles.tapZones} pointerEvents="box-none">
+          <Pressable style={styles.tapLeft} onPress={() => handleTap('left')} />
+          <Pressable style={styles.tapRight} onPress={() => handleTap('right')} />
+        </View>
+      )}
+
+      {/* photo progress bars */}
+      {sortedPhotos.length > 1 && (
+        <View style={styles.progressBars}>
+          {sortedPhotos.map((_, i) => (
+            <View key={i} style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, i <= photoIndex && styles.progressBarActive]} />
+            </View>
+          ))}
+        </View>
+      )}
+
       {user.distanceKm ? (
         <View style={styles.distanceBadge}>
           <Ionicons name="location-outline" size={14} color="#FFFFFF" />
@@ -90,7 +138,95 @@ export function SwipeActions({ onNope, onLike }: { onNope: () => void; onLike: (
   );
 }
 
-export function FilterSheet({ onClose }: { onClose: () => void }) {
+const GENDER_OPTIONS: Array<{ label: string; value: Preferences['preferredGender'] }> = [
+  { label: 'Girls', value: 'FEMALE' },
+  { label: 'Boys', value: 'MALE' },
+  { label: 'Both', value: null },
+];
+
+const DISTANCE_OPTIONS = [10, 25, 50, 100, 200];
+const MIN_AGE_OPTIONS = [18, 20, 22, 25, 28, 30];
+const MAX_AGE_OPTIONS = [22, 25, 28, 30, 35, 40, 99];
+
+export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply?: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [locationLabel, setLocationLabel] = useState<string | null>(null);
+
+  const [preferredGender, setPreferredGender] = useState<Preferences['preferredGender']>(null);
+  const [maxDistanceKm, setMaxDistanceKm] = useState<number>(50);
+  const [minAge, setMinAge] = useState<number>(18);
+  const [maxAge, setMaxAge] = useState<number>(35);
+  const [showDistance, setShowDistance] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setLoading(false); return; }
+      try {
+        const [{ preferences }, privacy] = await Promise.all([
+          getMyPreferences(session.access_token),
+          getPrivacySettings(session.access_token),
+        ]);
+        if (preferences) {
+          setPreferredGender(preferences.preferredGender);
+          setMaxDistanceKm(preferences.maxDistanceKm ?? 50);
+          setMinAge(preferences.minAge ?? 18);
+          setMaxAge(preferences.maxAge ?? 99);
+        }
+        setShowDistance(privacy.showDistance);
+      } catch (_) {}
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const requestLocation = async () => {
+    setLocating(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLocating(false);
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const [geo] = await Location.reverseGeocodeAsync(pos.coords).catch(() => [null]);
+      const city = geo ? [geo.city, geo.country].filter(Boolean).join(', ') : undefined;
+      if (city) setLocationLabel(city);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        await updateLocation(session.access_token, pos.coords.latitude, pos.coords.longitude, city);
+      }
+    } catch (_) {}
+    setLocating(false);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        await Promise.all([
+          updateMyPreferences(session.access_token, { preferredGender, minAge, maxAge: maxAge === 99 ? null : maxAge, maxDistanceKm }),
+          updatePrivacySettings(session.access_token, { showDistance }),
+        ]);
+        onApply?.();
+        onClose();
+      }
+    } catch (_) {}
+    setSaving(false);
+  };
+
+  const reset = async () => {
+    setPreferredGender(null);
+    setMaxDistanceKm(50);
+    setMinAge(18);
+    setMaxAge(35);
+    setShowDistance(false);
+  };
+
   return (
     <View style={styles.overlay}>
       <Pressable style={styles.dim} onPress={onClose} />
@@ -98,36 +234,99 @@ export function FilterSheet({ onClose }: { onClose: () => void }) {
         <View style={styles.sheetHandle} />
         <View style={styles.sheetTop}>
           <Text style={styles.filterTitle}>Filters</Text>
-          <Pressable onPress={onClose}>
-            <Text style={styles.clear}>Clear</Text>
+          <Pressable onPress={reset}>
+            <Text style={styles.clear}>Reset</Text>
           </Pressable>
         </View>
-        <Text style={styles.filterLabel}>Interested in</Text>
-        <View style={styles.segment}>
-          {['Girls', 'Boys', 'Both'].map((item, index) => (
-            <View key={item} style={[styles.segmentItem, index === 0 && styles.segmentActive]}>
-              <Text style={[styles.segmentText, index === 0 && styles.segmentTextActive]}>{item}</Text>
+
+        {loading ? (
+          <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
+        ) : (
+          <>
+            <Text style={styles.filterLabel}>Interested in</Text>
+            <View style={styles.segment}>
+              {GENDER_OPTIONS.map((opt) => {
+                const active = preferredGender === opt.value;
+                return (
+                  <Pressable
+                    key={opt.label}
+                    style={[styles.segmentItem, active && styles.segmentActive]}
+                    onPress={() => setPreferredGender(opt.value)}
+                  >
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          ))}
-        </View>
-        <View style={styles.locationBox}>
-          <Text style={styles.floatingLabel}>Location</Text>
-          <Text style={styles.locationText}>Chicago, USA</Text>
-          <Ionicons name="chevron-forward" size={20} color={colors.primary} />
-        </View>
-        <RangeRow label="Distance" value="40km" />
-        <View style={styles.sliderTrack}>
-          <View style={styles.sliderFill} />
-          <View style={styles.sliderThumb} />
-        </View>
-        <RangeRow label="Age" value="20-28" />
-        <View style={styles.sliderTrack}>
-          <View style={[styles.sliderFill, styles.ageFill]} />
-          <View style={[styles.sliderThumb, styles.ageThumbOne]} />
-          <View style={[styles.sliderThumb, styles.ageThumbTwo]} />
-        </View>
-        <PrimaryButton onPress={onClose} style={styles.filterButton}>
-          Continue
+
+            <Pressable style={styles.locationBox} onPress={requestLocation} disabled={locating}>
+              <Text style={styles.floatingLabel}>Location</Text>
+              {locating ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Text style={styles.locationText}>{locationLabel ?? 'Tap to update'}</Text>
+              )}
+              <Ionicons name="location-outline" size={20} color={colors.primary} />
+            </Pressable>
+
+            <RangeRow label="Max distance" value={`${maxDistanceKm} km`} />
+            <View style={styles.pillRow}>
+              {DISTANCE_OPTIONS.map((d) => (
+                <Pressable
+                  key={d}
+                  style={[styles.pill, maxDistanceKm === d && styles.pillActive]}
+                  onPress={() => setMaxDistanceKm(d)}
+                >
+                  <Text style={[styles.pillText, maxDistanceKm === d && styles.pillTextActive]}>
+                    {d} km
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <RangeRow label="Min age" value={`${minAge}`} />
+            <View style={styles.pillRow}>
+              {MIN_AGE_OPTIONS.map((a) => (
+                <Pressable
+                  key={a}
+                  style={[styles.pill, minAge === a && styles.pillActive]}
+                  onPress={() => setMinAge(Math.min(a, maxAge))}
+                >
+                  <Text style={[styles.pillText, minAge === a && styles.pillTextActive]}>{a}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <RangeRow label="Max age" value={maxAge === 99 ? 'Any' : `${maxAge}`} />
+            <View style={styles.pillRow}>
+              {MAX_AGE_OPTIONS.map((a) => (
+                <Pressable
+                  key={a}
+                  style={[styles.pill, maxAge === a && styles.pillActive]}
+                  onPress={() => setMaxAge(Math.max(a, minAge))}
+                >
+                  <Text style={[styles.pillText, maxAge === a && styles.pillTextActive]}>
+                    {a === 99 ? 'Any' : a}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.toggleRow}>
+              <Text style={styles.filterLabel}>Show my distance</Text>
+              <Switch
+                value={showDistance}
+                onValueChange={setShowDistance}
+                trackColor={{ true: colors.primary }}
+              />
+            </View>
+          </>
+        )}
+
+        <PrimaryButton onPress={saving ? undefined : save} style={styles.filterButton}>
+          {saving ? 'Saving...' : 'Apply'}
         </PrimaryButton>
       </View>
     </View>
@@ -200,6 +399,34 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
   },
   cardImage: { ...StyleSheet.absoluteFillObject },
+  tapZones: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+  },
+  tapLeft: { flex: 1 },
+  tapRight: { flex: 1 },
+  progressBars: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    right: 10,
+    flexDirection: 'row',
+    gap: 4,
+  },
+  progressBarTrack: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  progressBarActive: {
+    backgroundColor: '#FFFFFF',
+  },
   distanceBadge: {
     position: 'absolute',
     top: 20,
@@ -340,7 +567,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 34,
+    marginBottom: 24,
   },
   floatingLabel: {
     position: 'absolute',
@@ -356,30 +583,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 22,
+    marginBottom: 12,
   },
   rangeValue: { color: colors.muted, fontSize: 15 },
-  sliderTrack: {
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#E7E7EC',
-    marginBottom: 38,
+  pillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 20,
   },
-  sliderFill: { width: '50%', height: 5, borderRadius: 3, backgroundColor: colors.primary },
-  sliderThumb: {
-    position: 'absolute',
-    left: '45%',
-    top: -12,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  pill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  pillActive: {
     backgroundColor: colors.primary,
-    borderWidth: 4,
-    borderColor: '#FFFFFF',
+    borderColor: colors.primary,
   },
-  ageFill: { width: '38%', marginLeft: '10%' },
-  ageThumbOne: { left: '8%' },
-  ageThumbTwo: { left: '38%' },
+  pillText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  pillTextActive: { color: '#FFFFFF' },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   filterButton: { marginTop: 12 },
   matchOverlay: {
     ...StyleSheet.absoluteFillObject,

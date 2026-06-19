@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { MessageType } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 
 const VALID_ACTIONS = ['LIKE', 'DISLIKE', 'SUPER_LIKE'] as const;
@@ -64,34 +63,33 @@ export async function createSwipe(req: Request, res: Response) {
         where: { swiperId_targetId: { swiperId: targetId, targetId: swiperId } },
       });
 
+      console.log('[createSwipe] swiperId:', swiperId, 'targetId:', targetId, 'reverseSwipe:', reverseSwipe);
+
       if (reverseSwipe && (reverseSwipe.action === 'LIKE' || reverseSwipe.action === 'SUPER_LIKE')) {
         // Always store user1Id < user2Id to avoid duplicate match records
         const [user1Id, user2Id] = swiperId < targetId
           ? [swiperId, targetId]
           : [targetId, swiperId];
 
-        match = await prisma.$transaction(async (tx) => {
-          const createdMatch = await tx.match.create({
-            data: { user1Id, user2Id },
-          });
+        match = await prisma.match.create({
+          data: { user1Id, user2Id },
+        });
 
-          await tx.message.create({
-            data: {
-              matchId: createdMatch.id,
-              senderId: null,
-              content: "Match successful, let's chat!",
-              messageType: MessageType.SYSTEM,
-              isRead: true,
-            },
-          });
-
-          return createdMatch;
+        await prisma.message.create({
+          data: {
+            matchId: match.id,
+            senderId: null,
+            content: "Match successful, let's chat!",
+            messageType: 'SYSTEM',
+            isRead: true,
+          },
         });
       }
     }
 
     res.status(201).json({ swipe, match });
-  } catch {
+  } catch (err) {
+    console.error('[createSwipe] error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 }

@@ -109,10 +109,20 @@ export default function PhotosScreen() {
     if (!token) return;
     setBusyId(photoId);
     try {
-      await setPrimaryPhoto(token, photoId);
-      setPhotos(prev => prev.map(p => ({ ...p, isPrimary: p.id === photoId })));
-    } catch {
-      Alert.alert('Failed', 'Could not update primary photo.');
+      const updated = await setPrimaryPhoto(token, photoId);
+      setPhotos(prev =>
+        prev.map(p => ({
+          ...p,
+          isPrimary: p.id === photoId,
+          isVerified: p.id === photoId ? updated.isVerified : false,
+        })),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      Alert.alert(
+        'Cannot set as primary',
+        msg || 'Could not update primary photo.',
+      );
     } finally {
       setBusyId(null);
     }
@@ -176,8 +186,13 @@ export default function PhotosScreen() {
                         </View>
                       )}
                       {photo.isPrimary && (
-                        <View style={styles.badge}>
-                          <Text style={styles.badgeText}>Primary</Text>
+                        <View style={[styles.badge, photo.isVerified && styles.verifiedBadge]}>
+                          {photo.isVerified && (
+                            <Ionicons name="checkmark-circle" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
+                          )}
+                          <Text style={styles.badgeText}>
+                            {photo.isVerified ? 'Photo Verified' : 'Primary'}
+                          </Text>
                         </View>
                       )}
                       {!photo.isPrimary && !isBusy && (
@@ -245,7 +260,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingHorizontal: 10,
     paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
+  verifiedBadge: { backgroundColor: '#22C55E' },
   badgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900' },
   starBadge: {
     position: 'absolute',

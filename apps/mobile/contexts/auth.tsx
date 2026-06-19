@@ -98,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           getMyPhotos(session.access_token).catch(() => []),
         ]);
         complete = hasCompleteProfile(user, profile, photos.length);
-      } catch {
+      } catch (_) {
         complete = false;
       }
 
@@ -135,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const complete = hasCompleteProfile(user, profile, photos.length);
       setProfileComplete(complete);
       return complete;
-    } catch {
+    } catch (_) {
       setProfileComplete(false);
       return false;
     }

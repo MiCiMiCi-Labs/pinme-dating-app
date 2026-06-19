@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
@@ -9,6 +9,7 @@ import {
   matchingProfileCompletionThreshold,
 } from '@/lib/profileCompleteness';
 import { supabase } from '@/lib/supabase';
+import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 
 const SWIPE_THRESHOLD = 100;
 
@@ -21,6 +22,7 @@ export default function SwipeScreen() {
   const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
   const [profileCompletionPercent, setProfileCompletionPercent] = useState<number | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [feedKey, setFeedKey] = useState(0);
   const { height } = useWindowDimensions();
   const cardHeight = Math.min(height * 0.54, 440);
 
@@ -33,61 +35,66 @@ export default function SwipeScreen() {
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
+  const loadFeed = useCallback(async (cancelled?: { current: boolean }) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    if (!hasLoadedRef.current) setLoading(true);
+    try {
+      const [{ user: appUser }, myPhotos] = await Promise.all([
+        getCurrentAppUser(session.access_token),
+        getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
+      ]);
 
-      async function load() {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        if (!hasLoadedRef.current) setLoading(true);
-        try {
-          const [{ user: appUser }, myPhotos] = await Promise.all([
-            getCurrentAppUser(session.access_token),
-            getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
-          ]);
+      const completion = getDetailedProfileCompletion(appUser, myPhotos);
 
-          const completion = getDetailedProfileCompletion(appUser, myPhotos);
-
-          if (!cancelled) {
-            setProfileCompletionPercent(completion.percent);
-          }
-
-          if (completion.percent < matchingProfileCompletionThreshold) {
-            if (!cancelled) {
-              setUsers([]);
-              setCurrentIndex(0);
-              const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-              setMyPhotoUrl(primary?.url ?? null);
-              hasLoadedRef.current = true;
-            }
-            return;
-          }
-
-          const { users: feed } = await getDiscoveryFeed(session.access_token);
-
-          if (!cancelled) {
-            setUsers(feed);
-            setCurrentIndex(0);
-            pan.setValue({ x: 0, y: 0 });
-            const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-            setMyPhotoUrl(primary?.url ?? null);
-            hasLoadedRef.current = true;
-          }
-        } catch {
-          // keep existing state on error
-        } finally {
-          if (!cancelled) {
-            hasLoadedRef.current = true;
-            setLoading(false);
-          }
-        }
+      if (!cancelled?.current) {
+        setProfileCompletionPercent(completion.percent);
       }
 
-      load();
-      return () => { cancelled = true; };
-    }, [pan])
+      if (completion.percent < matchingProfileCompletionThreshold) {
+        if (!cancelled?.current) {
+          setUsers([]);
+          setCurrentIndex(0);
+          const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+          setMyPhotoUrl(primary?.url ?? null);
+          hasLoadedRef.current = true;
+        }
+        return;
+      }
+
+      const { users: feed } = await getDiscoveryFeed(session.access_token);
+
+      if (!cancelled?.current) {
+        setUsers(feed);
+        setCurrentIndex(0);
+        pan.setValue({ x: 0, y: 0 });
+        const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
+        setMyPhotoUrl(primary?.url ?? null);
+        hasLoadedRef.current = true;
+      }
+    } catch (_) {
+      // keep existing state on error
+    } finally {
+      if (!cancelled?.current) {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      }
+    }
+  }, [pan]);
+
+  useFocusEffect(
+    useCallback(() => {
+      setUsers(prev => filterSwiped(prev));
+      const cancelled = { current: false };
+      loadFeed(cancelled);
+      return () => { cancelled.current = true; };
+    }, [loadFeed])
   );
+
+  useEffect(() => {
+    if (feedKey === 0) return;
+    loadFeed();
+  }, [feedKey, loadFeed]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -96,6 +103,7 @@ export default function SwipeScreen() {
     setCurrentIndex(prev => prev + 1);
 
     if (!user) return;
+    markSwiped(user.id);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
 
@@ -109,7 +117,7 @@ export default function SwipeScreen() {
         setMatchedUser(user);
         setMatchedMatchId(match.id);
       }
-    } catch {
+    } catch (_) {
       // non-blocking — card already advanced
     }
   }, [pan]);
@@ -213,7 +221,12 @@ export default function SwipeScreen() {
         />
       ) : null}
 
-      {filterOpen ? <FilterSheet onClose={() => setFilterOpen(false)} /> : null}
+      {filterOpen ? (
+        <FilterSheet
+          onClose={() => setFilterOpen(false)}
+          onApply={() => setFeedKey(k => k + 1)}
+        />
+      ) : null}
 
       {matchedUser ? (
         <MatchOverlay
