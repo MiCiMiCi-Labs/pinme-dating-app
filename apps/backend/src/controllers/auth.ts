@@ -60,8 +60,8 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
-    const authEmail = authUser.email ?? null;
-    const authPhone = authUser.phone ?? null;
+    const authEmail = authUser.email?.trim() || null;
+    const authPhone = authUser.phone?.trim() || null;
 
     if (!authEmail && !authPhone) {
       res.status(400).json({

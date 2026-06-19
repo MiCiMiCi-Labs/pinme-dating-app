@@ -418,7 +418,7 @@ export async function createSwipe(accessToken: string, targetId: string, action:
 
 // ─── Chat ────────────────────────────────────────────────────────────────────
 
-export type ChatMessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM';
+export type ChatMessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM' | 'VOICE';
 
 export type ChatMessage = {
   id: string;
@@ -426,6 +426,7 @@ export type ChatMessage = {
   senderId: string | null;
   content: string;
   messageType: ChatMessageType;
+  durationSec: number | null;
   isRead: boolean;
   createdAt: string;
   sender: {
@@ -470,6 +471,28 @@ export async function sendMessage(accessToken: string, matchId: string, content:
     method: 'POST',
     headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
     body: JSON.stringify({ content, messageType: 'TEXT' }),
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function sendVoiceMessage(
+  accessToken: string,
+  matchId: string,
+  audioUri: string,
+  durationSec: number
+) {
+  const formData = new FormData();
+  formData.append('audio', {
+    uri: audioUri,
+    name: 'voice.m4a',
+    type: 'audio/m4a',
+  } as unknown as Blob);
+  formData.append('durationSec', String(Math.round(durationSec)));
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/voice`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: formData,
   });
   return parseResponse<{ message: ChatMessage }>(response);
 }
