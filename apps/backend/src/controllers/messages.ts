@@ -2,6 +2,8 @@ import { MessageType } from '@prisma/client';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
+import { supabase } from '../lib/supabase';
+import { VOICE_BUCKET } from '../lib/storage';
 
 const sendMessageSchema = z
   .object({
@@ -142,6 +144,73 @@ export async function sendMessage(req: Request, res: Response) {
 
     res.status(201).json({ message });
   } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function uploadVoiceMessage(req: Request, res: Response) {
+  try {
+    const matchId = req.params.matchId as string;
+    const file = req.file;
+
+    if (!file) {
+      res.status(400).json({ error: 'No audio file provided' });
+      return;
+    }
+
+    const dbUserId = await resolveDbUserId(req.userId!);
+    if (!dbUserId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const access = await findAccessibleMatch(matchId, dbUserId);
+    if (!access.match) {
+      res.status(access.status).json({ error: access.error });
+      return;
+    }
+
+    if (access.match.unmatchedAt) {
+      res.status(409).json({ error: 'Cannot send messages to an unmatched chat' });
+      return;
+    }
+
+    const durationSec = req.body.durationSec ? Math.round(Number(req.body.durationSec)) : null;
+
+    const messageId = crypto.randomUUID();
+    const storagePath = `${dbUserId}/voice/${messageId}.m4a`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(VOICE_BUCKET)
+      .upload(storagePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      res.status(500).json({ error: 'Voice upload failed', detail: uploadError.message });
+      return;
+    }
+
+    const { data: { publicUrl } } = supabase.storage.from(VOICE_BUCKET).getPublicUrl(storagePath);
+
+    const message = await prisma.message.create({
+      data: {
+        id: messageId,
+        matchId,
+        senderId: dbUserId,
+        content: publicUrl,
+        messageType: MessageType.VOICE,
+        durationSec: durationSec ?? null,
+      },
+      include: {
+        sender: { select: { id: true, name: true } },
+      },
+    });
+
+    res.status(201).json({ message });
+  } catch (err) {
+    console.error('[uploadVoiceMessage] error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 }

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -19,6 +20,7 @@ import {
   getMessages,
   markMessagesRead,
   sendMessage,
+  sendVoiceMessage,
   type ChatMessage,
 } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
@@ -51,6 +53,7 @@ function mapRealtimeMessage(row: RealtimeMessageRow): ChatMessage {
     senderId: row.sender_id,
     content: row.content,
     messageType: row.message_type,
+    durationSec: null,
     isRead: row.is_read,
     createdAt: row.created_at,
     sender: null,
@@ -95,6 +98,12 @@ export default function ChatRoomScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSec, setRecordingSec] = useState(0);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   const loadThread = useCallback(async (showLoading = true) => {
     if (!matchId) {
@@ -236,6 +245,7 @@ export default function ChatRoomScreen() {
       senderId: currentUserId,
       content,
       messageType: 'TEXT',
+      durationSec: null,
       isRead: false,
       createdAt: new Date().toISOString(),
       sender: null,
@@ -260,6 +270,95 @@ export default function ChatRoomScreen() {
       setError(err instanceof Error ? err.message : 'Failed to send message');
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleStartRecording = async () => {
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        setError('Microphone permission is required to send voice messages.');
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      recordingRef.current = recording;
+      setRecordingSec(0);
+      setIsRecording(true);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSec(s => s + 1);
+      }, 1000);
+    } catch (_) {
+      setError('Could not start recording.');
+    }
+  };
+
+  const handleStopRecording = async () => {
+    if (!recordingRef.current || !matchId) return;
+
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setIsRecording(false);
+
+    const duration = recordingSec;
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+
+    try {
+      await rec.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      const uri = rec.getURI();
+      if (!uri) return;
+
+      setSending(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+
+      const { message } = await sendVoiceMessage(session.access_token, matchId, uri, duration);
+      setMessages(current => mergeMessage(current, message));
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send voice message');
+    } finally {
+      setSending(false);
+      setRecordingSec(0);
+    }
+  };
+
+  const handlePlayVoice = async (messageId: string, url: string) => {
+    if (playingId === messageId) {
+      await soundRef.current?.stopAsync();
+      await soundRef.current?.unloadAsync();
+      soundRef.current = null;
+      setPlayingId(null);
+      return;
+    }
+    if (soundRef.current) {
+      await soundRef.current.stopAsync();
+      await soundRef.current.unloadAsync();
+      soundRef.current = null;
+    }
+    try {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: url },
+        { shouldPlay: true },
+        (status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            setPlayingId(null);
+            soundRef.current?.unloadAsync();
+            soundRef.current = null;
+          }
+        }
+      );
+      soundRef.current = sound;
+      setPlayingId(messageId);
+    } catch (_) {
+      setError('Could not play voice message.');
     }
   };
 
@@ -314,6 +413,46 @@ export default function ChatRoomScreen() {
                 }
 
                 const mine = message.senderId === currentUserId;
+
+                if (message.messageType === 'VOICE') {
+                  const isPlaying = playingId === message.id;
+                  const dur = message.durationSec ?? 0;
+                  const durLabel = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}`;
+                  return (
+                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                      <Pressable
+                        style={[styles.bubble, styles.voiceBubble, mine ? styles.bubbleMine : styles.bubbleOther]}
+                        onPress={() => handlePlayVoice(message.id, message.content)}
+                      >
+                        <Ionicons
+                          name={isPlaying ? 'pause-circle' : 'play-circle'}
+                          size={32}
+                          color={mine ? colors.primary : colors.text}
+                        />
+                        <View style={styles.voiceInfo}>
+                          <View style={styles.voiceWave}>
+                            {Array.from({ length: 16 }).map((_, i) => (
+                              <View
+                                key={i}
+                                style={[
+                                  styles.voiceBar,
+                                  { height: 4 + (i % 4) * 4 },
+                                  isPlaying && styles.voiceBarActive,
+                                ]}
+                              />
+                            ))}
+                          </View>
+                          <Text style={styles.voiceDuration}>{durLabel}</Text>
+                        </View>
+                      </Pressable>
+                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
+                        {formatMessageTime(message.createdAt)}
+                        {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
+                      </Text>
+                    </View>
+                  );
+                }
+
                 return (
                   <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
                     <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
@@ -338,27 +477,48 @@ export default function ChatRoomScreen() {
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <View style={styles.inputRow}>
-          <View style={styles.messageInput}>
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              placeholder="Your message"
-              placeholderTextColor={colors.grayIcon}
-              style={styles.input}
-              multiline
-            />
-          </View>
-          <Pressable
-            style={[styles.sendButton, (!draft.trim() || sending) && styles.sendDisabled]}
-            onPress={handleSend}
-            disabled={!draft.trim() || sending}
-          >
-            {sending ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Ionicons name="send" size={22} color="#FFFFFF" />
-            )}
-          </Pressable>
+          {isRecording ? (
+            <View style={styles.recordingRow}>
+              <View style={styles.recordingDot} />
+              <Text style={styles.recordingTimer}>
+                {`${Math.floor(recordingSec / 60)}:${String(recordingSec % 60).padStart(2, '0')}`}
+              </Text>
+              <Pressable style={styles.stopButton} onPress={handleStopRecording}>
+                <Ionicons name="stop" size={22} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <View style={styles.messageInput}>
+                <TextInput
+                  value={draft}
+                  onChangeText={setDraft}
+                  placeholder="Your message"
+                  placeholderTextColor={colors.grayIcon}
+                  style={styles.input}
+                  multiline
+                />
+              </View>
+              <Pressable
+                style={[styles.sendButton, styles.micButton, sending && styles.sendDisabled]}
+                onPress={handleStartRecording}
+                disabled={sending}
+              >
+                <Ionicons name="mic" size={22} color="#FFFFFF" />
+              </Pressable>
+              <Pressable
+                style={[styles.sendButton, (!draft.trim() || sending) && styles.sendDisabled]}
+                onPress={handleSend}
+                disabled={!draft.trim() || sending}
+              >
+                {sending ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="send" size={22} color="#FFFFFF" />
+                )}
+              </Pressable>
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -541,5 +701,66 @@ const styles = StyleSheet.create({
   },
   sendDisabled: {
     opacity: 0.45,
+  },
+  micButton: {
+    backgroundColor: colors.soft,
+  },
+  voiceBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 160,
+  },
+  voiceInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  voiceWave: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  voiceBar: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: colors.grayIcon,
+  },
+  voiceBarActive: {
+    backgroundColor: colors.primary,
+  },
+  voiceDuration: {
+    color: colors.muted,
+    fontSize: 11,
+  },
+  recordingRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    height: 52,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EF4444',
+  },
+  recordingTimer: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  stopButton: {
+    width: 54,
+    height: 54,
+    borderRadius: 16,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
