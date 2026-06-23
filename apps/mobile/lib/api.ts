@@ -418,7 +418,14 @@ export async function createSwipe(accessToken: string, targetId: string, action:
 
 // ─── Chat ────────────────────────────────────────────────────────────────────
 
-export type ChatMessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM' | 'VOICE';
+export type ChatMessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM' | 'VOICE' | 'VIDEO';
+
+export type ReplyPreview = {
+  id: string;
+  content: string;
+  messageType: ChatMessageType;
+  sender: { id: string; name: string } | null;
+};
 
 export type ChatMessage = {
   id: string;
@@ -433,6 +440,7 @@ export type ChatMessage = {
     id: string;
     name: string;
   } | null;
+  replyTo: ReplyPreview | null;
 };
 
 export type ChatMatch = {
@@ -466,11 +474,16 @@ export async function getMessages(accessToken: string, matchId: string, limit = 
   return parseResponse<{ messages: ChatMessage[] }>(response);
 }
 
-export async function sendMessage(accessToken: string, matchId: string, content: string) {
+export async function sendMessage(
+  accessToken: string,
+  matchId: string,
+  content: string,
+  replyToId?: string
+) {
   const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}`, {
     method: 'POST',
     headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, messageType: 'TEXT' }),
+    body: JSON.stringify({ content, messageType: 'TEXT', ...(replyToId ? { replyToId } : {}) }),
   });
   return parseResponse<{ message: ChatMessage }>(response);
 }
@@ -479,17 +492,57 @@ export async function sendVoiceMessage(
   accessToken: string,
   matchId: string,
   audioUri: string,
-  durationSec: number
+  durationSec: number,
+  replyToId?: string
 ) {
   const formData = new FormData();
-  formData.append('audio', {
-    uri: audioUri,
-    name: 'voice.m4a',
-    type: 'audio/m4a',
-  } as unknown as Blob);
+  formData.append('audio', { uri: audioUri, name: 'voice.m4a', type: 'audio/m4a' } as unknown as Blob);
   formData.append('durationSec', String(Math.round(durationSec)));
+  if (replyToId) formData.append('replyToId', replyToId);
 
   const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/voice`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: formData,
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function sendImageMessage(
+  accessToken: string,
+  matchId: string,
+  imageUri: string,
+  mimeType: string,
+  replyToId?: string
+) {
+  const rawExt = mimeType.split('/')[1] ?? 'jpg';
+  const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+  const formData = new FormData();
+  formData.append('image', { uri: imageUri, name: `image.${ext}`, type: mimeType } as unknown as Blob);
+  if (replyToId) formData.append('replyToId', replyToId);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/image`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: formData,
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function sendVideoMessage(
+  accessToken: string,
+  matchId: string,
+  videoUri: string,
+  mimeType: string,
+  durationSec?: number,
+  replyToId?: string
+) {
+  const formData = new FormData();
+  formData.append('video', { uri: videoUri, name: 'video.mp4', type: mimeType } as unknown as Blob);
+  if (durationSec != null) formData.append('durationSec', String(Math.round(durationSec)));
+  if (replyToId) formData.append('replyToId', replyToId);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/video`, {
     method: 'POST',
     headers: authHeaders(accessToken),
     body: formData,

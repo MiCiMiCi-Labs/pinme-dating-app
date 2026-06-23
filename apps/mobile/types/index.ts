@@ -15,7 +15,7 @@ export type RelationshipGoal =
   | 'FRIENDSHIP'
   | 'UNDECIDED';
 export type SwipeAction = 'LIKE' | 'DISLIKE' | 'SUPER_LIKE';
-export type MessageType = 'TEXT' | 'IMAGE' | 'GIF';
+export type MessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM' | 'VOICE' | 'VIDEO';
 export type ReportStatus = 'PENDING' | 'REVIEWED' | 'RESOLVED' | 'DISMISSED';
 
 export interface User {
