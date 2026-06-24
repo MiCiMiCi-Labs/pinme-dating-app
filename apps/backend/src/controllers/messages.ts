@@ -3,14 +3,44 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { supabase } from '../lib/supabase';
-import { VOICE_BUCKET } from '../lib/storage';
+import { CHAT_MEDIA_BUCKET, VOICE_BUCKET } from '../lib/storage';
 
 const sendMessageSchema = z
   .object({
     content: z.string().trim().min(1).max(5000),
     messageType: z.enum([MessageType.TEXT, MessageType.IMAGE, MessageType.GIF]).default(MessageType.TEXT),
+    replyToId: z.string().uuid().optional(),
   })
   .strict();
+
+async function resolveReplyToId(
+  raw: unknown,
+  matchId: string
+): Promise<{ ok: true; id: string | null } | { ok: false }> {
+  if (!raw || typeof raw !== 'string') return { ok: true, id: null };
+  const msg = await prisma.message.findUnique({
+    where: { id: raw },
+    select: { matchId: true },
+  });
+  if (!msg || msg.matchId !== matchId) return { ok: false };
+  return { ok: true, id: raw };
+}
+
+const replyToInclude = {
+  select: {
+    id: true,
+    content: true,
+    messageType: true,
+    sender: { select: { id: true, name: true } },
+  },
+} as const;
+
+function parseDurationSec(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
 
 function parseLimit(value: unknown): number {
   const limit = Number(value ?? 50);
@@ -76,12 +106,8 @@ export async function getMessages(req: Request, res: Response) {
         ...(before ? { createdAt: { lt: new Date(before) } } : {}),
       },
       include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        sender: { select: { id: true, name: true } },
+        replyTo: replyToInclude,
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
@@ -125,20 +151,23 @@ export async function sendMessage(req: Request, res: Response) {
       return;
     }
 
+    const replyResult = await resolveReplyToId(parsedBody.data.replyToId, matchId);
+    if (!replyResult.ok) {
+      res.status(400).json({ error: 'Invalid replyToId' });
+      return;
+    }
+
     const message = await prisma.message.create({
       data: {
         matchId,
         senderId: dbUserId,
         content: parsedBody.data.content,
         messageType: parsedBody.data.messageType,
+        replyToId: replyResult.id,
       },
       include: {
-        sender: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        sender: { select: { id: true, name: true } },
+        replyTo: replyToInclude,
       },
     });
 
@@ -175,7 +204,13 @@ export async function uploadVoiceMessage(req: Request, res: Response) {
       return;
     }
 
-    const durationSec = req.body.durationSec ? Math.round(Number(req.body.durationSec)) : null;
+    const durationSec = parseDurationSec(req.body.durationSec);
+
+    const replyResult = await resolveReplyToId(req.body.replyToId, matchId);
+    if (!replyResult.ok) {
+      res.status(400).json({ error: 'Invalid replyToId' });
+      return;
+    }
 
     const messageId = crypto.randomUUID();
     const storagePath = `${dbUserId}/voice/${messageId}.m4a`;
@@ -202,15 +237,148 @@ export async function uploadVoiceMessage(req: Request, res: Response) {
         content: publicUrl,
         messageType: MessageType.VOICE,
         durationSec: durationSec ?? null,
+        replyToId: replyResult.id,
       },
       include: {
         sender: { select: { id: true, name: true } },
+        replyTo: replyToInclude,
       },
     });
 
     res.status(201).json({ message });
   } catch (err) {
     console.error('[uploadVoiceMessage] error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function uploadImageMessage(req: Request, res: Response) {
+  try {
+    const matchId = req.params.matchId as string;
+    const file = req.file;
+
+    if (!file) {
+      res.status(400).json({ error: 'No image file provided' });
+      return;
+    }
+
+    const dbUserId = await resolveDbUserId(req.userId!);
+    if (!dbUserId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const access = await findAccessibleMatch(matchId, dbUserId);
+    if (!access.match) {
+      res.status(access.status).json({ error: access.error });
+      return;
+    }
+
+    if (access.match.unmatchedAt) {
+      res.status(409).json({ error: 'Cannot send messages to an unmatched chat' });
+      return;
+    }
+
+    const replyResult = await resolveReplyToId(req.body.replyToId, matchId);
+    if (!replyResult.ok) {
+      res.status(400).json({ error: 'Invalid replyToId' });
+      return;
+    }
+
+    const rawExt = file.mimetype.split('/')[1] ?? 'jpg';
+    const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+    const messageId = crypto.randomUUID();
+    const storagePath = `${dbUserId}/images/${messageId}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(CHAT_MEDIA_BUCKET)
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+    if (uploadError) {
+      res.status(500).json({ error: 'Image upload failed', detail: uploadError.message });
+      return;
+    }
+
+    const { data: { publicUrl } } = supabase.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(storagePath);
+
+    const message = await prisma.message.create({
+      data: { id: messageId, matchId, senderId: dbUserId, content: publicUrl, messageType: MessageType.IMAGE, replyToId: replyResult.id },
+      include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude },
+    });
+
+    res.status(201).json({ message });
+  } catch (err) {
+    console.error('[uploadImageMessage] error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function uploadVideoMessage(req: Request, res: Response) {
+  try {
+    const matchId = req.params.matchId as string;
+    const file = req.file;
+
+    if (!file) {
+      res.status(400).json({ error: 'No video file provided' });
+      return;
+    }
+
+    const dbUserId = await resolveDbUserId(req.userId!);
+    if (!dbUserId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const access = await findAccessibleMatch(matchId, dbUserId);
+    if (!access.match) {
+      res.status(access.status).json({ error: access.error });
+      return;
+    }
+
+    if (access.match.unmatchedAt) {
+      res.status(409).json({ error: 'Cannot send messages to an unmatched chat' });
+      return;
+    }
+
+    const durationSec = parseDurationSec(req.body.durationSec);
+
+    const replyResult = await resolveReplyToId(req.body.replyToId, matchId);
+    if (!replyResult.ok) {
+      res.status(400).json({ error: 'Invalid replyToId' });
+      return;
+    }
+
+    const ext = file.mimetype === 'video/quicktime' ? 'mov' : 'mp4';
+    const messageId = crypto.randomUUID();
+    const storagePath = `${dbUserId}/videos/${messageId}.${ext}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(CHAT_MEDIA_BUCKET)
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+    if (uploadError) {
+      res.status(500).json({ error: 'Video upload failed', detail: uploadError.message });
+      return;
+    }
+
+    const { data: { publicUrl } } = supabase.storage.from(CHAT_MEDIA_BUCKET).getPublicUrl(storagePath);
+
+    const message = await prisma.message.create({
+      data: {
+        id: messageId,
+        matchId,
+        senderId: dbUserId,
+        content: publicUrl,
+        messageType: MessageType.VIDEO,
+        durationSec,
+        replyToId: replyResult.id,
+      },
+      include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude },
+    });
+
+    res.status(201).json({ message });
+  } catch (err) {
+    console.error('[uploadVideoMessage] error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
