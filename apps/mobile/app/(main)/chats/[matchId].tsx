@@ -6,6 +6,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -28,8 +29,25 @@ import {
   sendVoiceMessage,
   type ChatMessage,
   type ReplyPreview,
+  getReplySuggestions,
 } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
+
+const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 5000;
+const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
+
+type ReplyTone = 'warm' | 'playful' | 'curious';
+
+const REPLY_TONES: Array<{ value: ReplyTone; label: string }> = [
+  { value: 'warm', label: 'Warm' },
+  { value: 'playful', label: 'Playful' },
+  { value: 'curious', label: 'Curious' },
+];
+
+function logRealtimeStatus(matchId: string, status: string) {
+  if (!__DEV__) return;
+  console.log(`[chat realtime] ${matchId}: ${status} at ${new Date().toISOString()}`);
+}
 
 function formatMessageTime(value: string) {
   return new Intl.DateTimeFormat(undefined, {
@@ -106,6 +124,22 @@ function mergeMessage(current: ChatMessage[], incoming: ChatMessage) {
   return next;
 }
 
+function messagesAreEqual(a: ChatMessage[], b: ChatMessage[]) {
+  if (a.length !== b.length) return false;
+
+  return a.every((message, index) => {
+    const next = b[index];
+    return (
+      message.id === next.id &&
+      message.content === next.content &&
+      message.messageType === next.messageType &&
+      message.isRead === next.isRead &&
+      message.createdAt === next.createdAt &&
+      message.replyTo?.id === next.replyTo?.id
+    );
+  });
+}
+
 export default function ChatRoomScreen() {
   const params = useLocalSearchParams<{
     matchId?: string;
@@ -117,6 +151,7 @@ export default function ChatRoomScreen() {
   const photoUrl = firstParam(params.photoUrl) ?? photos.redhead;
 
   const scrollRef = useRef<ScrollView>(null);
+  const appStateRef = useRef(AppState.currentState);
   const currentUserIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -126,6 +161,12 @@ export default function ChatRoomScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [replyTone, setReplyTone] = useState<ReplyTone>('warm');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSec, setRecordingSec] = useState(0);
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -153,13 +194,22 @@ export default function ChatRoomScreen() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) return;
 
-      const [{ user }, { messages: loadedMessages }] = await Promise.all([
-        getCurrentAppUser(session.access_token),
-        getMessages(session.access_token, matchId),
-      ]);
+      let loadedMessages: ChatMessage[];
 
-      setCurrentUserId(user.id);
-      setMessages(loadedMessages);
+      if (currentUserIdRef.current) {
+        ({ messages: loadedMessages } = await getMessages(session.access_token, matchId));
+      } else {
+        const [{ user }, messagesResponse] = await Promise.all([
+          getCurrentAppUser(session.access_token),
+          getMessages(session.access_token, matchId),
+        ]);
+
+        currentUserIdRef.current = user.id;
+        setCurrentUserId(user.id);
+        loadedMessages = messagesResponse.messages;
+      }
+
+      setMessages(current => (messagesAreEqual(current, loadedMessages) ? current : loadedMessages));
       await markMessagesRead(session.access_token, matchId).catch(() => null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -190,6 +240,22 @@ export default function ChatRoomScreen() {
     let closed = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
+    function stopSafetySync() {
+      if (!pollingRef.current) return;
+
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    function ensureSafetySync() {
+      if (pollingRef.current) return;
+      if (appStateRef.current !== 'active') return;
+
+      pollingRef.current = setInterval(() => {
+        loadThread(false);
+      }, MESSAGE_SAFETY_SYNC_INTERVAL_MS);
+    }
+
     async function startRealtime() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token || closed) return;
@@ -208,6 +274,7 @@ export default function ChatRoomScreen() {
           },
           (payload) => {
             const row = payload.new as RealtimeMessageRow;
+            logRealtimeStatus(activeMatchId, `INSERT ${row.id}`);
             setMessages(current => mergeMessage(current, mapRealtimeMessage(row, current)));
             requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
@@ -236,42 +303,50 @@ export default function ChatRoomScreen() {
           },
           (payload) => {
             const row = payload.new as RealtimeMessageRow;
+            logRealtimeStatus(activeMatchId, `UPDATE ${row.id}`);
             setMessages(current => mergeMessage(current, mapRealtimeMessage(row, current)));
           }
         )
         .subscribe((status) => {
           if (closed) return;
+          logRealtimeStatus(activeMatchId, status);
 
           if (status === 'SUBSCRIBED') {
             setError(null);
-            if (pollingRef.current) {
-              clearInterval(pollingRef.current);
-              pollingRef.current = null;
-            }
+            loadThread(false);
           }
 
-          if (status === 'CHANNEL_ERROR') {
+          if (REALTIME_FALLBACK_STATUSES.has(status)) {
             setError('Realtime connection failed. Refreshing messages.');
-            if (!pollingRef.current) {
-              pollingRef.current = setInterval(() => {
-                loadThread(false);
-              }, 4000);
-            }
+            ensureSafetySync();
           }
         });
     }
 
+    const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
+      const wasBackground = appStateRef.current === 'inactive' || appStateRef.current === 'background';
+      appStateRef.current = nextAppState;
+
+      if (nextAppState === 'active') {
+        ensureSafetySync();
+        if (wasBackground) {
+          loadThread(false);
+        }
+      } else {
+        stopSafetySync();
+      }
+    });
+
+    ensureSafetySync();
     startRealtime();
 
     return () => {
       closed = true;
+      appStateSubscription.remove();
       if (channel) {
         supabase.removeChannel(channel);
       }
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
+      stopSafetySync();
     };
   }, [loadThread, matchId]);
 
@@ -319,6 +394,34 @@ export default function ChatRoomScreen() {
       setError(err instanceof Error ? err.message : 'Failed to send message');
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleGenerateReplySuggestions = async (tone: ReplyTone = replyTone) => {
+    if (!matchId || loadingSuggestions) return;
+
+    setReplyTone(tone);
+    setAssistantOpen(true);
+    setActionsOpen(false);
+    setLoadingSuggestions(true);
+    setSuggestionError(null);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+
+      const { suggestions } = await getReplySuggestions(session.access_token, matchId, tone);
+      setReplySuggestions(suggestions);
+    } catch (err) {
+      setSuggestionError(err instanceof Error ? err.message : 'Failed to generate replies');
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleSubmitEditing = () => {
+    if (draft.trim()) {
+      handleSend();
     }
   };
 
@@ -688,6 +791,82 @@ export default function ChatRoomScreen() {
           </View>
         )}
 
+        {actionsOpen && (
+          <View style={styles.actionsTray}>
+            <Pressable style={styles.actionTile} onPress={() => {
+              setActionsOpen(false);
+              handlePickMedia();
+            }}>
+              <Ionicons name="image-outline" size={22} color={colors.primary} />
+              <Text style={styles.actionLabel}>Photo</Text>
+            </Pressable>
+            <Pressable style={styles.actionTile} onPress={() => handleGenerateReplySuggestions(replyTone)}>
+              <Ionicons name="sparkles" size={22} color={colors.primary} />
+              <Text style={styles.actionLabel}>AI reply</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {assistantOpen && (
+          <View style={styles.assistantPanel}>
+            <View style={styles.assistantHandle} />
+            <View style={styles.suggestionsHeader}>
+              <Text style={styles.suggestionsTitle}>AI reply assistant</Text>
+              <Pressable onPress={() => {
+                setAssistantOpen(false);
+                setReplySuggestions([]);
+                setSuggestionError(null);
+              }} hitSlop={8}>
+                <Ionicons name="close" size={18} color={colors.grayIcon} />
+              </Pressable>
+            </View>
+
+            <View style={styles.toneRow}>
+              {REPLY_TONES.map((tone) => {
+                const selected = tone.value === replyTone;
+                return (
+                  <Pressable
+                    key={tone.value}
+                    style={[styles.toneButton, selected && styles.toneButtonActive]}
+                    onPress={() => handleGenerateReplySuggestions(tone.value)}
+                    disabled={loadingSuggestions}
+                  >
+                    <Text style={[styles.toneButtonText, selected && styles.toneButtonTextActive]}>
+                      {tone.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {loadingSuggestions ? (
+              <View style={styles.suggestionLoadingRow}>
+                <ActivityIndicator color={colors.primary} />
+                <Text style={styles.suggestionMuted}>Writing suggestions...</Text>
+              </View>
+            ) : null}
+
+            {suggestionError ? (
+              <Text style={styles.suggestionError}>{suggestionError}</Text>
+            ) : null}
+
+            {replySuggestions.map((suggestion) => (
+              <Pressable
+                key={suggestion}
+                style={styles.suggestionChip}
+                onPress={() => {
+                  setDraft(suggestion);
+                  setAssistantOpen(false);
+                  setReplySuggestions([]);
+                  setSuggestionError(null);
+                }}
+              >
+                <Text style={styles.suggestionText}>{suggestion}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
         <View style={styles.inputRow}>
           {isRecording ? (
             <View style={styles.recordingRow}>
@@ -702,11 +881,11 @@ export default function ChatRoomScreen() {
           ) : (
             <>
               <Pressable
-                style={[styles.sendButton, styles.attachButton, sending && styles.sendDisabled]}
-                onPress={handlePickMedia}
+                style={[styles.composerButton, sending && styles.sendDisabled]}
+                onPress={handleStartRecording}
                 disabled={sending}
               >
-                <Ionicons name="image-outline" size={22} color={colors.text} />
+                <Ionicons name="mic-outline" size={20} color={colors.primary} />
               </Pressable>
               <View style={styles.messageInput}>
                 <TextInput
@@ -716,25 +895,20 @@ export default function ChatRoomScreen() {
                   placeholderTextColor={colors.grayIcon}
                   style={styles.input}
                   multiline
+                  returnKeyType="send"
+                  submitBehavior="submit"
+                  onSubmitEditing={handleSubmitEditing}
                 />
               </View>
               <Pressable
-                style={[styles.sendButton, styles.micButton, sending && styles.sendDisabled]}
-                onPress={handleStartRecording}
+                style={[styles.composerButton, actionsOpen && styles.composerButtonActive]}
+                onPress={() => {
+                  setActionsOpen(current => !current);
+                  setAssistantOpen(false);
+                }}
                 disabled={sending}
               >
-                <Ionicons name="mic" size={22} color="#FFFFFF" />
-              </Pressable>
-              <Pressable
-                style={[styles.sendButton, (!draft.trim() || sending) && styles.sendDisabled]}
-                onPress={handleSend}
-                disabled={!draft.trim() || sending}
-              >
-                {sending ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Ionicons name="send" size={22} color="#FFFFFF" />
-                )}
+                <Ionicons name={actionsOpen ? 'close' : 'add'} size={24} color={actionsOpen ? '#FFFFFF' : colors.primary} />
               </Pressable>
             </>
           )}
@@ -919,10 +1093,114 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 8,
   },
+  actionsTray: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  actionTile: {
+    flex: 1,
+    minHeight: 64,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  actionLabel: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  assistantPanel: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 14,
+    gap: 12,
+    marginBottom: 12,
+  },
+  assistantHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: colors.line,
+  },
+  suggestionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  suggestionsTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  toneRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  toneButton: {
+    flex: 1,
+    height: 36,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  toneButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  toneButtonText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  toneButtonTextActive: {
+    color: '#FFFFFF',
+  },
+  suggestionLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  suggestionMuted: {
+    color: colors.muted,
+    fontSize: 13,
+  },
+  suggestionError: {
+    color: colors.primary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  suggestionChip: {
+    borderRadius: 12,
+    backgroundColor: colors.soft,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  suggestionText: {
+    color: colors.text,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
   inputRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 12,
+    alignItems: 'center',
+    gap: 10,
     paddingBottom: 28,
   },
   messageInput: {
@@ -952,10 +1230,27 @@ const styles = StyleSheet.create({
   sendDisabled: {
     opacity: 0.45,
   },
+  composerButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.soft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  composerButtonActive: {
+    backgroundColor: colors.primary,
+  },
   micButton: {
     backgroundColor: colors.soft,
   },
   attachButton: {
+    backgroundColor: colors.soft,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+  },
+  aiButton: {
     backgroundColor: colors.soft,
     width: 44,
     height: 44,

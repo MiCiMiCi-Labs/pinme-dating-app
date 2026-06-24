@@ -474,6 +474,19 @@ export async function getMessages(accessToken: string, matchId: string, limit = 
   return parseResponse<{ messages: ChatMessage[] }>(response);
 }
 
+export async function getReplySuggestions(
+  accessToken: string,
+  matchId: string,
+  tone: 'warm' | 'playful' | 'curious' = 'warm'
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/ai/reply-suggestions`, {
+    method: 'POST',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ matchId, tone }),
+  });
+  return parseResponse<{ suggestions: string[] }>(response);
+}
+
 export async function sendMessage(
   accessToken: string,
   matchId: string,
