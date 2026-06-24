@@ -13,6 +13,7 @@ import privacyRouter from './privacy';
 import locationRouter from './location';
 import testRouter from './test';
 import discoveryRouter from './discovery';
+import aiRouter from './ai';
 
 export const router = Router();
 
@@ -30,3 +31,4 @@ router.use('/preferences', preferencesRouter);
 router.use('/privacy', privacyRouter);
 router.use('/test', testRouter);
 router.use('/discovery', discoveryRouter);
+router.use('/ai', aiRouter);
