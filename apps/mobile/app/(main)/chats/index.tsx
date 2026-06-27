@@ -37,10 +37,18 @@ function formatRelativeTime(value: string) {
 }
 
 function getPreview(match: ChatMatch) {
-  if (!match.lastMessage) return 'Say hello and start the conversation';
-  if (match.lastMessage.messageType === 'SYSTEM') return match.lastMessage.content;
-  if (match.lastMessage.messageType !== 'TEXT') return match.lastMessage.messageType.toLowerCase();
-  return match.lastMessage.content;
+  const msg = match.lastMessage;
+  if (!msg) return 'Say hello and start the conversation';
+  if (msg.recalledAt) return 'Message recalled';
+  switch (msg.messageType) {
+    case 'SYSTEM': return msg.content;
+    case 'TEXT':   return msg.content;
+    case 'VOICE':  return '[Voice message]';
+    case 'IMAGE':  return '[Photo]';
+    case 'VIDEO':  return '[Video]';
+    case 'GIF':    return '[GIF]';
+    default:       return msg.content;
+  }
 }
 
 export default function ChatListScreen() {

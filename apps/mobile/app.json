@@ -15,9 +15,11 @@
         "NSLocationWhenInUseUsageDescription": "PinMe needs your location to show nearby people.",
         "NSPhotoLibraryUsageDescription": "PinMe needs access to your photos to update your profile.",
         "NSCameraUsageDescription": "PinMe needs camera access to take profile photos.",
+        "NSMicrophoneUsageDescription": "PinMe needs microphone access for voice calls.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -26,7 +28,8 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -53,6 +56,12 @@
     "scheme": "pinme",
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "24ac85cf-e3c3-4672-9feb-055844a6538f"
+      }
     }
   }
 }

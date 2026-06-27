@@ -201,8 +201,8 @@ export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user:
         {prompts.length ? (
           <>
             <Text style={styles.sectionTitle}>Prompts</Text>
-            {prompts.map((prompt) => (
-              <View key={prompt.question} style={styles.promptCard}>
+            {prompts.map((prompt, i) => (
+              <View key={i} style={styles.promptCard}>
                 <Text style={styles.promptQuestion}>{prompt.question}</Text>
                 <Text style={styles.bodyText}>{prompt.answer}</Text>
               </View>
