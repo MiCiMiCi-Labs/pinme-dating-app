@@ -1444,6 +1444,14 @@ export default function ChatRoomScreen() {
             partnerName={name}
             partnerAvatar={photoUrl}
             onEnd={() => setCallSession(null)}
+            onCallEnded={(duration) => {
+              const mins = Math.floor(duration / 60);
+              const secs = duration % 60;
+              const label = duration > 0
+                ? ` · ${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+                : '';
+              setError(`📞 Voice call ended${label}`);
+            }}
           />
         </Suspense>
       )}
