@@ -2,6 +2,7 @@
   "expo": {
     "name": "PinMe",
     "slug": "pinme-dating-app",
+    "owner": "micimici",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -60,7 +61,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "24ac85cf-e3c3-4672-9feb-055844a6538f"
+        "projectId": "19ef99e0-6eca-496c-9f89-904e55c06d13"
       }
     }
   }
