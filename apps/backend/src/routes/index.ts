@@ -15,6 +15,7 @@ import testRouter from './test';
 import discoveryRouter from './discovery';
 import aiRouter from './ai';
 import callsRouter from './calls';
+import voiceRoomsRouter from './voiceRooms';
 
 export const router = Router();
 
@@ -34,3 +35,4 @@ router.use('/test', testRouter);
 router.use('/discovery', discoveryRouter);
 router.use('/ai', aiRouter);
 router.use('/calls', callsRouter);
+router.use('/voice-rooms', voiceRoomsRouter);

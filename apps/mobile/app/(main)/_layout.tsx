@@ -60,6 +60,14 @@ export default function MainLayout() {
         }}
       />
       <Tabs.Screen
+        name="voice-rooms"
+        options={{
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name={focused ? 'radio' : 'radio-outline'} focused={focused} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           tabBarIcon: ({ color, focused }) => (
