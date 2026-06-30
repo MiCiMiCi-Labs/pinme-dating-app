@@ -4,7 +4,9 @@ import { requireAuth } from '../middleware/auth';
 import {
   getMessages,
   markMessagesRead,
+  recallMessage,
   sendMessage,
+  toggleReaction,
   uploadImageMessage,
   uploadVideoMessage,
   uploadVoiceMessage,
@@ -96,6 +98,12 @@ router.post('/:matchId/image', withUpload(imageUpload, 'image', uploadImageMessa
 
 // POST /api/v1/messages/:matchId/video  (multipart/form-data, field: "video")
 router.post('/:matchId/video', withUpload(videoUpload, 'video', uploadVideoMessage));
+
+// PATCH /api/v1/messages/:matchId/:messageId/recall
+router.patch('/:matchId/:messageId/recall', recallMessage);
+
+// POST /api/v1/messages/:matchId/:messageId/reaction  { emoji }
+router.post('/:matchId/:messageId/reaction', toggleReaction);
 
 // POST /api/v1/messages/:matchId/read
 router.post('/:matchId/read', markMessagesRead);

@@ -31,9 +31,17 @@ const replyToInclude = {
     id: true,
     content: true,
     messageType: true,
+    recalledAt: true,
     sender: { select: { id: true, name: true } },
   },
 } as const;
+
+const reactionsInclude = {
+  select: { id: true, userId: true, emoji: true },
+} as const;
+
+const RECALL_WINDOW_MS = 2 * 60 * 1000;
+const ALLOWED_EMOJIS = new Set(['❤️', '😂', '😮', '👍', '👎']);
 
 function parseDurationSec(raw: unknown): number | null {
   if (raw == null || raw === '') return null;
@@ -108,6 +116,7 @@ export async function getMessages(req: Request, res: Response) {
       include: {
         sender: { select: { id: true, name: true } },
         replyTo: replyToInclude,
+        reactions: reactionsInclude,
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
@@ -168,6 +177,7 @@ export async function sendMessage(req: Request, res: Response) {
       include: {
         sender: { select: { id: true, name: true } },
         replyTo: replyToInclude,
+        reactions: reactionsInclude,
       },
     });
 
@@ -242,6 +252,7 @@ export async function uploadVoiceMessage(req: Request, res: Response) {
       include: {
         sender: { select: { id: true, name: true } },
         replyTo: replyToInclude,
+        reactions: reactionsInclude,
       },
     });
 
@@ -303,7 +314,7 @@ export async function uploadImageMessage(req: Request, res: Response) {
 
     const message = await prisma.message.create({
       data: { id: messageId, matchId, senderId: dbUserId, content: publicUrl, messageType: MessageType.IMAGE, replyToId: replyResult.id },
-      include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude },
+      include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude, reactions: reactionsInclude },
     });
 
     res.status(201).json({ message });
@@ -373,12 +384,139 @@ export async function uploadVideoMessage(req: Request, res: Response) {
         durationSec,
         replyToId: replyResult.id,
       },
-      include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude },
+      include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude, reactions: reactionsInclude },
     });
 
     res.status(201).json({ message });
   } catch (err) {
     console.error('[uploadVideoMessage] error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function recallMessage(req: Request, res: Response) {
+  try {
+    const matchId = req.params.matchId as string;
+    const messageId = req.params.messageId as string;
+
+    const dbUserId = await resolveDbUserId(req.userId!);
+    if (!dbUserId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const access = await findAccessibleMatch(matchId, dbUserId);
+    if (!access.match) {
+      res.status(access.status).json({ error: access.error });
+      return;
+    }
+
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { senderId: true, matchId: true, createdAt: true, recalledAt: true },
+    });
+
+    if (!msg || msg.matchId !== matchId) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    if (msg.senderId !== dbUserId) {
+      res.status(403).json({ error: 'Cannot recall someone else\'s message' });
+      return;
+    }
+
+    if (msg.recalledAt) {
+      res.status(409).json({ error: 'Message already recalled' });
+      return;
+    }
+
+    if (Date.now() - msg.createdAt.getTime() > RECALL_WINDOW_MS) {
+      res.status(409).json({ error: 'Recall window has expired' });
+      return;
+    }
+
+    const updated = await prisma.message.update({
+      where: { id: messageId },
+      data: { recalledAt: new Date() },
+      include: {
+        sender: { select: { id: true, name: true } },
+        replyTo: replyToInclude,
+        reactions: reactionsInclude,
+      },
+    });
+
+    res.json({ message: updated });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function toggleReaction(req: Request, res: Response) {
+  try {
+    const matchId = req.params.matchId as string;
+    const messageId = req.params.messageId as string;
+    const { emoji } = req.body;
+
+    if (typeof emoji !== 'string' || !ALLOWED_EMOJIS.has(emoji)) {
+      res.status(400).json({ error: 'Invalid emoji' });
+      return;
+    }
+
+    const dbUserId = await resolveDbUserId(req.userId!);
+    if (!dbUserId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const access = await findAccessibleMatch(matchId, dbUserId);
+    if (!access.match) {
+      res.status(access.status).json({ error: access.error });
+      return;
+    }
+
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: { matchId: true, recalledAt: true },
+    });
+
+    if (!msg || msg.matchId !== matchId) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    if (msg.recalledAt) {
+      res.status(409).json({ error: 'Cannot react to a recalled message' });
+      return;
+    }
+
+    const existing = await prisma.messageReaction.findUnique({
+      where: { messageId_userId: { messageId, userId: dbUserId } },
+    });
+
+    if (existing) {
+      if (existing.emoji === emoji) {
+        await prisma.messageReaction.delete({ where: { id: existing.id } });
+      } else {
+        await prisma.messageReaction.update({ where: { id: existing.id }, data: { emoji } });
+      }
+    } else {
+      await prisma.messageReaction.create({
+        data: { id: crypto.randomUUID(), messageId, userId: dbUserId, emoji },
+      });
+    }
+
+    const updated = await prisma.message.findUnique({
+      where: { id: messageId },
+      include: {
+        sender: { select: { id: true, name: true } },
+        replyTo: replyToInclude,
+        reactions: reactionsInclude,
+      },
+    });
+
+    res.json({ message: updated });
+  } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
 }

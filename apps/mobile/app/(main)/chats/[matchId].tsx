@@ -3,7 +3,7 @@ import { Audio, ResizeMode, Video } from 'expo-av';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -21,20 +21,32 @@ import {
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import {
   getCurrentAppUser,
+  getCallToken,
   getMessages,
   markMessagesRead,
+  recallMessage,
+  sendGifMessage,
   sendImageMessage,
   sendMessage,
   sendVideoMessage,
   sendVoiceMessage,
+  toggleReaction,
   type ChatMessage,
+  type Reaction,
   type ReplyPreview,
   getReplySuggestions,
 } from '@/lib/api';
+const VoiceCallModal = lazy(() =>
+  import('@/components/voice-call-modal').then(m => ({ default: m.VoiceCallModal }))
+);
 import { supabase } from '@/lib/supabase';
+import Constants from 'expo-constants';
+import { STICKERS } from '@/lib/stickers';
 
 const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 5000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
+const RECALL_WINDOW_MS = 2 * 60 * 1000;
+const REACTION_EMOJIS = ['❤️', '😂', '😮', '👍', '👎'] as const;
 
 type ReplyTone = 'warm' | 'playful' | 'curious';
 
@@ -43,6 +55,15 @@ const REPLY_TONES: Array<{ value: ReplyTone; label: string }> = [
   { value: 'playful', label: 'Playful' },
   { value: 'curious', label: 'Curious' },
 ];
+
+type LocalChatMessage = ChatMessage & { _status?: 'sending' | 'failed' };
+
+type RetryPayload =
+  | { kind: 'text'; content: string; replyToId?: string }
+  | { kind: 'voice'; uri: string; durationSec: number; replyToId?: string }
+  | { kind: 'image'; uri: string; mimeType: string; replyToId?: string }
+  | { kind: 'video'; uri: string; mimeType: string; durationSec: number; replyToId?: string }
+  | { kind: 'gif'; url: string; replyToId?: string };
 
 function logRealtimeStatus(matchId: string, status: string) {
   if (!__DEV__) return;
@@ -61,6 +82,7 @@ function firstParam(value: string | string[] | undefined) {
 }
 
 function getReplyPreviewText(msg: ReplyPreview): string {
+  if (msg.recalledAt) return 'Message recalled';
   switch (msg.messageType) {
     case 'IMAGE': return '📷 Photo';
     case 'VIDEO': return '🎬 Video';
@@ -68,6 +90,17 @@ function getReplyPreviewText(msg: ReplyPreview): string {
     case 'GIF': return '🎞 GIF';
     default: return msg.content.length > 60 ? `${msg.content.slice(0, 60)}…` : msg.content;
   }
+}
+
+function groupReactions(reactions: Reaction[]): { emoji: string; count: number; userIds: string[] }[] {
+  const map = new Map<string, { count: number; userIds: string[] }>();
+  for (const r of reactions) {
+    const entry = map.get(r.emoji) ?? { count: 0, userIds: [] };
+    entry.count++;
+    entry.userIds.push(r.userId);
+    map.set(r.emoji, entry);
+  }
+  return Array.from(map.entries()).map(([emoji, { count, userIds }]) => ({ emoji, count, userIds }));
 }
 
 type RealtimeMessageRow = {
@@ -78,6 +111,7 @@ type RealtimeMessageRow = {
   message_type: ChatMessage['messageType'];
   duration_sec: number | null;
   reply_to_id: string | null;
+  recalled_at: string | null;
   is_read: boolean;
   created_at: string;
 };
@@ -87,7 +121,13 @@ function mapRealtimeMessage(row: RealtimeMessageRow, knownMessages: ChatMessage[
   if (row.reply_to_id) {
     const parent = knownMessages.find(m => m.id === row.reply_to_id);
     if (parent) {
-      replyTo = { id: parent.id, content: parent.content, messageType: parent.messageType, sender: parent.sender };
+      replyTo = {
+        id: parent.id,
+        content: parent.content,
+        messageType: parent.messageType,
+        recalledAt: parent.recalledAt,
+        sender: parent.sender,
+      };
     }
   }
   return {
@@ -98,13 +138,15 @@ function mapRealtimeMessage(row: RealtimeMessageRow, knownMessages: ChatMessage[
     messageType: row.message_type,
     durationSec: row.duration_sec ?? null,
     isRead: row.is_read,
+    recalledAt: row.recalled_at ?? null,
+    reactions: [],
     createdAt: row.created_at,
     sender: null,
     replyTo,
   };
 }
 
-function mergeMessage(current: ChatMessage[], incoming: ChatMessage) {
+function mergeMessage(current: LocalChatMessage[], incoming: LocalChatMessage): LocalChatMessage[] {
   const existingIndex = current.findIndex(message => message.id === incoming.id);
 
   if (existingIndex === -1) {
@@ -120,11 +162,21 @@ function mergeMessage(current: ChatMessage[], incoming: ChatMessage) {
     ...incoming,
     sender: incoming.sender ?? existing.sender,
     replyTo: incoming.replyTo ?? existing.replyTo,
+    // Realtime events carry reactions: [] — preserve existing reactions in that case
+    reactions: incoming.reactions.length > 0 ? incoming.reactions : existing.reactions,
   };
   return next;
 }
 
-function messagesAreEqual(a: ChatMessage[], b: ChatMessage[]) {
+function reactionsSignature(reactions: Reaction[]): string {
+  return reactions
+    .slice()
+    .sort((a, b) => a.userId.localeCompare(b.userId))
+    .map(r => `${r.userId}:${r.emoji}`)
+    .join(',');
+}
+
+function messagesAreEqual(a: LocalChatMessage[], b: LocalChatMessage[]): boolean {
   if (a.length !== b.length) return false;
 
   return a.every((message, index) => {
@@ -134,6 +186,8 @@ function messagesAreEqual(a: ChatMessage[], b: ChatMessage[]) {
       message.content === next.content &&
       message.messageType === next.messageType &&
       message.isRead === next.isRead &&
+      message.recalledAt === next.recalledAt &&
+      reactionsSignature(message.reactions) === reactionsSignature(next.reactions) &&
       message.createdAt === next.createdAt &&
       message.replyTo?.id === next.replyTo?.id
     );
@@ -153,9 +207,10 @@ export default function ChatRoomScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const appStateRef = useRef(AppState.currentState);
   const currentUserIdRef = useRef<string | null>(null);
-  const messagesRef = useRef<ChatMessage[]>([]);
+  const messagesRef = useRef<LocalChatMessage[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const retryPayloads = useRef<Map<string, RetryPayload>>(new Map());
+  const [messages, setMessages] = useState<LocalChatMessage[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
@@ -175,8 +230,12 @@ export default function ChatRoomScreen() {
   const soundRef = useRef<Audio.Sound | null>(null);
   const videoRef = useRef<Video | null>(null);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [longPressTarget, setLongPressTarget] = useState<LocalChatMessage | null>(null);
+  const [reactionTarget, setReactionTarget] = useState<ChatMessage | null>(null);
   const [imageViewer, setImageViewer] = useState<string | null>(null);
   const [videoPlayer, setVideoPlayer] = useState<string | null>(null);
+  const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
+  const [callSession, setCallSession] = useState<{ url: string; token: string; roomName: string } | null>(null);
 
   const loadThread = useCallback(async (showLoading = true) => {
     if (!matchId) {
@@ -209,7 +268,15 @@ export default function ChatRoomScreen() {
         loadedMessages = messagesResponse.messages;
       }
 
-      setMessages(current => (messagesAreEqual(current, loadedMessages) ? current : loadedMessages));
+      setMessages(current => {
+        const serverConfirmed = current.filter(m => !m._status);
+        if (messagesAreEqual(serverConfirmed, loadedMessages)) return current;
+        const pendingFailed = current.filter(m => m._status);
+        if (!pendingFailed.length) return loadedMessages;
+        return [...loadedMessages, ...pendingFailed].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+      });
       await markMessagesRead(session.access_token, matchId).catch(() => null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -305,6 +372,9 @@ export default function ChatRoomScreen() {
             const row = payload.new as RealtimeMessageRow;
             logRealtimeStatus(activeMatchId, `UPDATE ${row.id}`);
             setMessages(current => mergeMessage(current, mapRealtimeMessage(row, current)));
+            if (row.recalled_at) {
+              loadThread(false);
+            }
           }
         )
         .subscribe((status) => {
@@ -356,7 +426,10 @@ export default function ChatRoomScreen() {
 
     const pendingReplyTo = replyTo;
     const tempId = `pending-${Date.now()}`;
-    const optimisticMessage: ChatMessage = {
+
+    retryPayloads.current.set(tempId, { kind: 'text', content, replyToId: pendingReplyTo?.id });
+
+    const optimisticMessage: LocalChatMessage = {
       id: tempId,
       matchId,
       senderId: currentUserId,
@@ -364,34 +437,37 @@ export default function ChatRoomScreen() {
       messageType: 'TEXT',
       durationSec: null,
       isRead: false,
+      recalledAt: null,
+      reactions: [],
       createdAt: new Date().toISOString(),
       sender: null,
       replyTo: pendingReplyTo ? {
         id: pendingReplyTo.id,
         content: pendingReplyTo.content,
         messageType: pendingReplyTo.messageType,
+        recalledAt: pendingReplyTo.recalledAt,
         sender: pendingReplyTo.sender,
       } : null,
+      _status: 'sending',
     };
 
     setDraft('');
     setReplyTo(null);
     setSending(true);
-    setError(null);
     setMessages(current => mergeMessage(current, optimisticMessage));
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Please log in again.');
-
       const { message } = await sendMessage(session.access_token, matchId, content, pendingReplyTo?.id);
+      retryPayloads.current.delete(tempId);
       setMessages(current => mergeMessage(current.filter(item => item.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-    } catch (err) {
-      setDraft(content);
-      setMessages(current => current.filter(item => item.id !== tempId));
-      setError(err instanceof Error ? err.message : 'Failed to send message');
+    } catch {
+      setMessages(current => current.map(m =>
+        m.id === tempId ? { ...m, _status: 'failed' as const } : m
+      ));
     } finally {
       setSending(false);
     }
@@ -455,11 +531,14 @@ export default function ChatRoomScreen() {
       recordingTimerRef.current = null;
     }
     setIsRecording(false);
+    setRecordingSec(0);
 
     const duration = recordingSec;
     const rec = recordingRef.current;
     const pendingReplyTo = replyTo;
     recordingRef.current = null;
+
+    let tempId: string | null = null;
 
     try {
       await rec.stopAndUnloadAsync();
@@ -467,21 +546,53 @@ export default function ChatRoomScreen() {
       const uri = rec.getURI();
       if (!uri) return;
 
+      tempId = `pending-voice-${Date.now()}`;
+      retryPayloads.current.set(tempId, { kind: 'voice', uri, durationSec: duration, replyToId: pendingReplyTo?.id });
+
+      const optimisticMessage: LocalChatMessage = {
+        id: tempId,
+        matchId,
+        senderId: currentUserId,
+        content: uri,
+        messageType: 'VOICE',
+        durationSec: duration,
+        isRead: false,
+        recalledAt: null,
+        reactions: [],
+        createdAt: new Date().toISOString(),
+        sender: null,
+        replyTo: pendingReplyTo ? {
+          id: pendingReplyTo.id,
+          content: pendingReplyTo.content,
+          messageType: pendingReplyTo.messageType,
+          recalledAt: pendingReplyTo.recalledAt,
+          sender: pendingReplyTo.sender,
+        } : null,
+        _status: 'sending',
+      };
+
       setReplyTo(null);
       setSending(true);
+      setMessages(current => mergeMessage(current, optimisticMessage));
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Please log in again.');
 
-      const { message } = await sendVoiceMessage(
-        session.access_token, matchId, uri, duration, pendingReplyTo?.id
-      );
-      setMessages(current => mergeMessage(current, message));
+      const { message } = await sendVoiceMessage(session.access_token, matchId, uri, duration, pendingReplyTo?.id);
+      retryPayloads.current.delete(tempId);
+      setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send voice message');
+    } catch {
+      if (tempId) {
+        setMessages(current => current.map(m =>
+          m.id === tempId ? { ...m, _status: 'failed' as const } : m
+        ));
+      } else {
+        setError('Failed to send voice message');
+      }
     } finally {
       setSending(false);
-      setRecordingSec(0);
     }
   };
 
@@ -541,8 +652,14 @@ export default function ChatRoomScreen() {
     const durationSec = isVideo ? Math.round((asset.duration ?? 0) / 1000) : null;
     const pendingReplyTo = replyTo;
 
-    const tempId = `pending-${Date.now()}`;
-    const optimisticMessage: ChatMessage = {
+    const tempId = `pending-media-${Date.now()}`;
+
+    const retryPayload: RetryPayload = isVideo
+      ? { kind: 'video', uri: asset.uri, mimeType, durationSec: durationSec ?? 0, replyToId: pendingReplyTo?.id }
+      : { kind: 'image', uri: asset.uri, mimeType, replyToId: pendingReplyTo?.id };
+    retryPayloads.current.set(tempId, retryPayload);
+
+    const optimisticMessage: LocalChatMessage = {
       id: tempId,
       matchId,
       senderId: currentUserId,
@@ -550,19 +667,22 @@ export default function ChatRoomScreen() {
       messageType: isVideo ? 'VIDEO' : 'IMAGE',
       durationSec,
       isRead: false,
+      recalledAt: null,
+      reactions: [],
       createdAt: new Date().toISOString(),
       sender: null,
       replyTo: pendingReplyTo ? {
         id: pendingReplyTo.id,
         content: pendingReplyTo.content,
         messageType: pendingReplyTo.messageType,
+        recalledAt: pendingReplyTo.recalledAt,
         sender: pendingReplyTo.sender,
       } : null,
+      _status: 'sending',
     };
 
     setReplyTo(null);
     setSending(true);
-    setError(null);
     setMessages(current => mergeMessage(current, optimisticMessage));
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
@@ -574,11 +694,13 @@ export default function ChatRoomScreen() {
         ? await sendVideoMessage(session.access_token, matchId, asset.uri, mimeType, durationSec ?? 0, pendingReplyTo?.id)
         : await sendImageMessage(session.access_token, matchId, asset.uri, mimeType, pendingReplyTo?.id);
 
+      retryPayloads.current.delete(tempId);
       setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-    } catch (err) {
-      setMessages(current => current.filter(m => m.id !== tempId));
-      setError(err instanceof Error ? err.message : 'Failed to send media');
+    } catch {
+      setMessages(current => current.map(m =>
+        m.id === tempId ? { ...m, _status: 'failed' as const } : m
+      ));
     } finally {
       setSending(false);
     }
@@ -587,6 +709,145 @@ export default function ChatRoomScreen() {
   const handleCloseVideo = async () => {
     try { await videoRef.current?.stopAsync(); } catch { /* ignore */ }
     setVideoPlayer(null);
+  };
+
+  const handleRecall = async (messageId: string) => {
+    if (!matchId) return;
+    const snapshot = [...messagesRef.current];
+    setMessages(current =>
+      current.map(m => m.id === messageId ? { ...m, recalledAt: new Date().toISOString() } : m)
+    );
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+      await recallMessage(session.access_token, matchId, messageId);
+    } catch (err) {
+      setMessages(snapshot);
+      setError(err instanceof Error ? err.message : 'Failed to recall message');
+    }
+  };
+
+  const handleRetry = useCallback(async (tempId: string) => {
+    const payload = retryPayloads.current.get(tempId);
+    if (!payload || !matchId) return;
+
+    const inFlight = messagesRef.current.find(m => m.id === tempId);
+    if (inFlight?._status === 'sending') return;
+
+    setMessages(current => current.map(m =>
+      m.id === tempId ? { ...m, _status: 'sending' as const } : m
+    ));
+    setSending(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+
+      let message: ChatMessage;
+      if (payload.kind === 'text') {
+        ({ message } = await sendMessage(session.access_token, matchId, payload.content, payload.replyToId));
+      } else if (payload.kind === 'voice') {
+        ({ message } = await sendVoiceMessage(session.access_token, matchId, payload.uri, payload.durationSec, payload.replyToId));
+      } else if (payload.kind === 'image') {
+        ({ message } = await sendImageMessage(session.access_token, matchId, payload.uri, payload.mimeType, payload.replyToId));
+      } else if (payload.kind === 'video') {
+        ({ message } = await sendVideoMessage(session.access_token, matchId, payload.uri, payload.mimeType, payload.durationSec, payload.replyToId));
+      } else {
+        ({ message } = await sendGifMessage(session.access_token, matchId, payload.url, payload.replyToId));
+      }
+
+      retryPayloads.current.delete(tempId);
+      setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    } catch {
+      setMessages(current => current.map(m =>
+        m.id === tempId ? { ...m, _status: 'failed' as const } : m
+      ));
+    } finally {
+      setSending(false);
+    }
+  }, [matchId]);
+
+  const handleCancelFailed = useCallback((tempId: string) => {
+    retryPayloads.current.delete(tempId);
+    setMessages(current => current.filter(m => m.id !== tempId));
+  }, []);
+
+  const handleToggleReaction = async (messageId: string, emoji: string) => {
+    if (!matchId) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+      const { message } = await toggleReaction(session.access_token, matchId, messageId, emoji);
+      setMessages(current => mergeMessage(current, message));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update reaction');
+    }
+  };
+
+  const handleSendGif = async (url: string) => {
+    setStickerPickerOpen(false);
+    setActionsOpen(false);
+    if (!matchId) return;
+
+    const pendingReplyTo = replyTo;
+    const tempId = `pending-gif-${Date.now()}`;
+
+    retryPayloads.current.set(tempId, { kind: 'gif', url, replyToId: pendingReplyTo?.id });
+
+    const optimisticMessage: LocalChatMessage = {
+      id: tempId,
+      matchId,
+      senderId: currentUserId ?? null,
+      content: url,
+      messageType: 'GIF',
+      durationSec: null,
+      isRead: false,
+      recalledAt: null,
+      reactions: [],
+      createdAt: new Date().toISOString(),
+      sender: null,
+      replyTo: pendingReplyTo
+        ? { id: pendingReplyTo.id, content: pendingReplyTo.content, messageType: pendingReplyTo.messageType, recalledAt: pendingReplyTo.recalledAt, sender: pendingReplyTo.sender }
+        : null,
+      _status: 'sending',
+    };
+
+    setReplyTo(null);
+    setSending(true);
+    setMessages(current => mergeMessage(current, optimisticMessage));
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please log in again.');
+      const { message } = await sendGifMessage(session.access_token, matchId, url, pendingReplyTo?.id);
+      retryPayloads.current.delete(tempId);
+      setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    } catch {
+      setMessages(current => current.map(m =>
+        m.id === tempId ? { ...m, _status: 'failed' as const } : m
+      ));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleStartCall = async () => {
+    if (!matchId) return;
+    if (Constants.executionEnvironment === 'storeClient') {
+      setError('Voice calls are not available in Expo Go. Use a dev build to test this feature.');
+      return;
+    }
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const result = await getCallToken(session.access_token, matchId);
+      setCallSession(result);
+    } catch {
+      setError('Could not start voice call. Please try again.');
+    }
   };
 
   return (
@@ -608,7 +869,10 @@ export default function ChatRoomScreen() {
               </View>
             </View>
           </View>
-          <IconButton icon="refresh-outline" onPress={loadThread} />
+          <View style={styles.headerActions}>
+            <IconButton icon="call-outline" onPress={handleStartCall} />
+            <IconButton icon="refresh-outline" onPress={loadThread} />
+          </View>
         </View>
 
         <View style={styles.dayRow}>
@@ -640,17 +904,59 @@ export default function ChatRoomScreen() {
                 }
 
                 const mine = message.senderId === currentUserId;
+                const reactionGroups = groupReactions(message.reactions);
+                const reactionsRow = reactionGroups.length > 0 ? (
+                  <View style={styles.reactionsRow}>
+                    {reactionGroups.map(({ emoji, count, userIds }) => (
+                      <Pressable
+                        key={emoji}
+                        style={[styles.reactionChip, userIds.includes(currentUserId ?? '') && styles.reactionChipMine]}
+                        onPress={() => handleToggleReaction(message.id, emoji)}
+                      >
+                        <Text style={styles.reactionChipText}>{emoji} {count}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null;
+
+                const statusIndicator = message._status === 'sending' ? (
+                  <View style={[styles.statusRow, mine && styles.statusRowMine]}>
+                    <ActivityIndicator size="small" color={colors.muted} style={styles.statusSpinner} />
+                    <Text style={styles.statusSendingText}>Sending…</Text>
+                  </View>
+                ) : message._status === 'failed' ? (
+                  <Pressable style={[styles.statusRow, mine && styles.statusRowMine]} onPress={() => handleRetry(message.id)}>
+                    <Ionicons name="alert-circle-outline" size={14} color="#EF4444" />
+                    <Text style={styles.statusFailedText}>Tap to retry</Text>
+                  </Pressable>
+                ) : null;
+
+                if (message.recalledAt) {
+                  return (
+                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                      <Pressable
+                        style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.recalledBubble]}
+                        onLongPress={() => setLongPressTarget(message)}
+                      >
+                        <Text style={styles.recalledText}>Message recalled</Text>
+                      </Pressable>
+                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
+                        {formatMessageTime(message.createdAt)}
+                      </Text>
+                    </View>
+                  );
+                }
 
                 if (message.messageType === 'VOICE') {
                   const isPlaying = playingId === message.id;
                   const dur = message.durationSec ?? 0;
                   const durLabel = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}`;
                   return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
                       <Pressable
                         style={[styles.bubble, styles.voiceBubble, mine ? styles.bubbleMine : styles.bubbleOther]}
-                        onPress={() => handlePlayVoice(message.id, message.content)}
-                        onLongPress={() => setReplyTo(message)}
+                        onPress={!message._status ? () => handlePlayVoice(message.id, message.content) : undefined}
+                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
                       >
                         {message.replyTo && (
                           <View style={styles.replyQuote}>
@@ -681,17 +987,19 @@ export default function ChatRoomScreen() {
                           </View>
                         </View>
                       </Pressable>
+                      {reactionsRow}
                       <Text style={[styles.messageTime, mine && styles.timeMine]}>
                         {formatMessageTime(message.createdAt)}
                         {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
                       </Text>
+                      {statusIndicator}
                     </View>
                   );
                 }
 
                 if (message.messageType === 'IMAGE') {
                   return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
                       {message.replyTo && (
                         <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.replyQuoteWrapper]}>
                           <View style={styles.replyQuote}>
@@ -701,8 +1009,8 @@ export default function ChatRoomScreen() {
                         </View>
                       )}
                       <Pressable
-                        onPress={() => setImageViewer(message.content)}
-                        onLongPress={() => setReplyTo(message)}
+                        onPress={!message._status ? () => setImageViewer(message.content) : undefined}
+                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
                       >
                         <Image
                           source={{ uri: message.content }}
@@ -710,10 +1018,47 @@ export default function ChatRoomScreen() {
                           contentFit="cover"
                         />
                       </Pressable>
+                      {reactionsRow}
                       <Text style={[styles.messageTime, mine && styles.timeMine]}>
                         {formatMessageTime(message.createdAt)}
                         {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
                       </Text>
+                      {statusIndicator}
+                    </View>
+                  );
+                }
+
+                if (message.messageType === 'GIF') {
+                  return (
+                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
+                      {message.replyTo && (
+                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.replyQuoteWrapper]}>
+                          <View style={styles.replyQuote}>
+                            <View style={styles.replyQuoteAccent} />
+                            <Text style={styles.replyQuoteText} numberOfLines={1}>{getReplyPreviewText(message.replyTo)}</Text>
+                          </View>
+                        </View>
+                      )}
+                      <Pressable
+                        style={styles.gifContainer}
+                        onPress={!message._status ? () => setImageViewer(message.content) : undefined}
+                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
+                      >
+                        <Image
+                          source={{ uri: message.content }}
+                          style={styles.gifBubble}
+                          contentFit="contain"
+                        />
+                        <View style={styles.gifBadge}>
+                          <Text style={styles.gifBadgeText}>GIF</Text>
+                        </View>
+                      </Pressable>
+                      {reactionsRow}
+                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
+                        {formatMessageTime(message.createdAt)}
+                        {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
+                      </Text>
+                      {statusIndicator}
                     </View>
                   );
                 }
@@ -722,7 +1067,7 @@ export default function ChatRoomScreen() {
                   const dur = message.durationSec ?? 0;
                   const durLabel = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}`;
                   return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
                       {message.replyTo && (
                         <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.replyQuoteWrapper]}>
                           <View style={styles.replyQuote}>
@@ -733,27 +1078,29 @@ export default function ChatRoomScreen() {
                       )}
                       <Pressable
                         style={styles.videoBubble}
-                        onPress={() => setVideoPlayer(message.content)}
-                        onLongPress={() => setReplyTo(message)}
+                        onPress={!message._status ? () => setVideoPlayer(message.content) : undefined}
+                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
                       >
                         <View style={styles.videoOverlay}>
                           <Ionicons name="play-circle" size={48} color="#FFFFFF" />
                           {dur > 0 && <Text style={styles.videoDuration}>{durLabel}</Text>}
                         </View>
                       </Pressable>
+                      {reactionsRow}
                       <Text style={[styles.messageTime, mine && styles.timeMine]}>
                         {formatMessageTime(message.createdAt)}
                         {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
                       </Text>
+                      {statusIndicator}
                     </View>
                   );
                 }
 
                 return (
-                  <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine]}>
+                  <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
                     <Pressable
                       style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}
-                      onLongPress={() => setReplyTo(message)}
+                      onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
                     >
                       {message.replyTo && (
                         <View style={styles.replyQuote}>
@@ -763,10 +1110,12 @@ export default function ChatRoomScreen() {
                       )}
                       <Text style={styles.bubbleText}>{message.content}</Text>
                     </Pressable>
+                    {reactionsRow}
                     <Text style={[styles.messageTime, mine && styles.timeMine]}>
                       {formatMessageTime(message.createdAt)}
                       {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
                     </Text>
+                    {statusIndicator}
                   </View>
                 );
               })
@@ -799,6 +1148,13 @@ export default function ChatRoomScreen() {
             }}>
               <Ionicons name="image-outline" size={22} color={colors.primary} />
               <Text style={styles.actionLabel}>Photo</Text>
+            </Pressable>
+            <Pressable style={styles.actionTile} onPress={() => {
+              setActionsOpen(false);
+              setStickerPickerOpen(true);
+            }}>
+              <Ionicons name="film-outline" size={22} color={colors.primary} />
+              <Text style={styles.actionLabel}>GIF</Text>
             </Pressable>
             <Pressable style={styles.actionTile} onPress={() => handleGenerateReplySuggestions(replyTone)}>
               <Ionicons name="sparkles" size={22} color={colors.primary} />
@@ -945,6 +1301,152 @@ export default function ChatRoomScreen() {
           )}
         </View>
       </Modal>
+
+      {/* Long press action menu */}
+      <Modal
+        visible={longPressTarget !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setLongPressTarget(null)}
+      >
+        <Pressable style={styles.actionOverlay} onPress={() => setLongPressTarget(null)}>
+          <View style={styles.actionMenu}>
+            {longPressTarget?._status === 'failed' ? (
+              <>
+                <Pressable
+                  style={styles.actionMenuItem}
+                  onPress={() => {
+                    handleRetry(longPressTarget!.id);
+                    setLongPressTarget(null);
+                  }}
+                >
+                  <Ionicons name="refresh-outline" size={20} color={colors.text} />
+                  <Text style={styles.actionMenuText}>Retry</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.actionMenuItem, styles.actionMenuItemDanger]}
+                  onPress={() => {
+                    handleCancelFailed(longPressTarget!.id);
+                    setLongPressTarget(null);
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  <Text style={[styles.actionMenuText, { color: '#EF4444' }]}>Remove</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Pressable
+                  style={styles.actionMenuItem}
+                  onPress={() => {
+                    setReplyTo(longPressTarget!);
+                    setLongPressTarget(null);
+                  }}
+                >
+                  <Ionicons name="return-up-back-outline" size={20} color={colors.text} />
+                  <Text style={styles.actionMenuText}>Reply</Text>
+                </Pressable>
+
+                {!longPressTarget?.recalledAt && (
+                  <Pressable
+                    style={styles.actionMenuItem}
+                    onPress={() => {
+                      setReactionTarget(longPressTarget);
+                      setLongPressTarget(null);
+                    }}
+                  >
+                    <Ionicons name="happy-outline" size={20} color={colors.text} />
+                    <Text style={styles.actionMenuText}>React</Text>
+                  </Pressable>
+                )}
+
+                {longPressTarget &&
+                  longPressTarget.senderId === currentUserId &&
+                  !longPressTarget.recalledAt &&
+                  Date.now() - new Date(longPressTarget.createdAt).getTime() <= RECALL_WINDOW_MS && (
+                  <Pressable
+                    style={[styles.actionMenuItem, styles.actionMenuItemDanger]}
+                    onPress={() => {
+                      handleRecall(longPressTarget!.id);
+                      setLongPressTarget(null);
+                    }}
+                  >
+                    <Ionicons name="arrow-undo-outline" size={20} color="#EF4444" />
+                    <Text style={[styles.actionMenuText, { color: '#EF4444' }]}>Recall</Text>
+                  </Pressable>
+                )}
+              </>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Reaction picker */}
+      <Modal
+        visible={reactionTarget !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReactionTarget(null)}
+      >
+        <Pressable style={styles.actionOverlay} onPress={() => setReactionTarget(null)}>
+          <View style={styles.reactionPicker}>
+            {REACTION_EMOJIS.map(emoji => (
+              <Pressable
+                key={emoji}
+                style={styles.reactionPickerEmoji}
+                onPress={() => {
+                  if (reactionTarget) handleToggleReaction(reactionTarget.id, emoji);
+                  setReactionTarget(null);
+                }}
+              >
+                <Text style={styles.reactionPickerEmojiText}>{emoji}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Sticker / GIF picker */}
+      <Modal
+        visible={stickerPickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setStickerPickerOpen(false)}
+      >
+        <Pressable style={styles.actionOverlay} onPress={() => setStickerPickerOpen(false)}>
+          <Pressable style={styles.stickerSheet} onPress={() => {}}>
+            <View style={styles.stickerSheetHandle} />
+            <Text style={styles.stickerSheetTitle}>Stickers</Text>
+            <View style={styles.stickerGrid}>
+              {STICKERS.map(sticker => (
+                <Pressable
+                  key={sticker.id}
+                  style={styles.stickerItem}
+                  onPress={() => handleSendGif(sticker.url)}
+                >
+                  <Image
+                    source={{ uri: sticker.url }}
+                    style={styles.stickerThumb}
+                    contentFit="cover"
+                  />
+                  <Text style={styles.stickerLabel}>{sticker.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      {callSession && (
+        <Suspense fallback={null}>
+          <VoiceCallModal
+            serverUrl={callSession.url}
+            token={callSession.token}
+            partnerName={name}
+            partnerAvatar={photoUrl}
+            onEnd={() => setCallSession(null)}
+          />
+        </Suspense>
+      )}
     </SafeAreaView>
   );
 }
@@ -963,6 +1465,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 4,
   },
   personRow: {
     flexDirection: 'row',
@@ -1383,6 +1889,92 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 11,
   },
+  recalledBubble: {
+    opacity: 0.6,
+  },
+  recalledText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontStyle: 'italic',
+  },
+  reactionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 4,
+  },
+  reactionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: colors.soft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  reactionChipMine: {
+    borderColor: colors.primary,
+    backgroundColor: '#FFF0F0',
+  },
+  reactionChipText: {
+    fontSize: 13,
+    color: colors.text,
+  },
+  actionOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  actionMenu: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 40,
+    gap: 4,
+  },
+  actionMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  actionMenuItemDanger: {
+    borderBottomWidth: 0,
+  },
+  actionMenuText: {
+    fontSize: 16,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  reactionPicker: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 50,
+    padding: 8,
+    gap: 4,
+    marginBottom: 80,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  reactionPickerEmoji: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 24,
+  },
+  reactionPickerEmojiText: {
+    fontSize: 28,
+  },
   recordingRow: {
     flex: 1,
     flexDirection: 'row',
@@ -1413,5 +2005,93 @@ const styles = StyleSheet.create({
     backgroundColor: '#EF4444',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  gifContainer: {
+    width: 180,
+    height: 160,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: colors.soft,
+  },
+  gifBubble: {
+    width: '100%',
+    height: '100%',
+  },
+  gifBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  gifBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  stickerSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  stickerSheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: colors.line,
+    marginBottom: 14,
+  },
+  stickerSheetTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 14,
+  },
+  stickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  stickerItem: {
+    width: '22%',
+    alignItems: 'center',
+    gap: 4,
+  },
+  stickerThumb: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 12,
+    backgroundColor: colors.soft,
+  },
+  stickerLabel: {
+    fontSize: 16,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 3,
+  },
+  statusRowMine: {
+    justifyContent: 'flex-end',
+  },
+  statusSpinner: {
+    transform: [{ scale: 0.55 }],
+  },
+  statusSendingText: {
+    color: colors.muted,
+    fontSize: 11,
+  },
+  statusFailedText: {
+    color: '#EF4444',
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

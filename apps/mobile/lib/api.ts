@@ -420,10 +420,17 @@ export async function createSwipe(accessToken: string, targetId: string, action:
 
 export type ChatMessageType = 'TEXT' | 'IMAGE' | 'GIF' | 'SYSTEM' | 'VOICE' | 'VIDEO';
 
+export type Reaction = {
+  id: string;
+  userId: string;
+  emoji: string;
+};
+
 export type ReplyPreview = {
   id: string;
   content: string;
   messageType: ChatMessageType;
+  recalledAt: string | null;
   sender: { id: string; name: string } | null;
 };
 
@@ -435,6 +442,8 @@ export type ChatMessage = {
   messageType: ChatMessageType;
   durationSec: number | null;
   isRead: boolean;
+  recalledAt: string | null;
+  reactions: Reaction[];
   createdAt: string;
   sender: {
     id: string;
@@ -459,6 +468,14 @@ export type ChatMatch = {
     photos: Photo[];
   };
 };
+
+export async function getCallToken(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${matchId}/token`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ url: string; token: string; roomName: string }>(response);
+}
 
 export async function getChatMatches(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
@@ -497,6 +514,20 @@ export async function sendMessage(
     method: 'POST',
     headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
     body: JSON.stringify({ content, messageType: 'TEXT', ...(replyToId ? { replyToId } : {}) }),
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function sendGifMessage(
+  accessToken: string,
+  matchId: string,
+  gifUrl: string,
+  replyToId?: string
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}`, {
+    method: 'POST',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: gifUrl, messageType: 'GIF', ...(replyToId ? { replyToId } : {}) }),
   });
   return parseResponse<{ message: ChatMessage }>(response);
 }
@@ -559,6 +590,28 @@ export async function sendVideoMessage(
     method: 'POST',
     headers: authHeaders(accessToken),
     body: formData,
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function recallMessage(accessToken: string, matchId: string, messageId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/${messageId}/recall`, {
+    method: 'PATCH',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ message: ChatMessage }>(response);
+}
+
+export async function toggleReaction(
+  accessToken: string,
+  matchId: string,
+  messageId: string,
+  emoji: string
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}/${messageId}/reaction`, {
+    method: 'POST',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emoji }),
   });
   return parseResponse<{ message: ChatMessage }>(response);
 }
