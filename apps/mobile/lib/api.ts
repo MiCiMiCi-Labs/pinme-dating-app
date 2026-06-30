@@ -295,6 +295,113 @@ export async function updatePrivacySettings(accessToken: string, data: PrivacySe
   return parseResponse<PrivacySettings>(response);
 }
 
+// ─── Voice Rooms ───────────────────────────────────────────────────────────
+
+export type VoiceRoomParticipant = {
+  id: string;
+  userId: string;
+  isMutedByHost: boolean;
+  joinedAt: string;
+  user: {
+    id: string;
+    name: string;
+    photos: Photo[];
+  };
+};
+
+export type VoiceRoom = {
+  id: string;
+  ownerId: string;
+  name: string;
+  tags: string[];
+  livekitRoomName: string;
+  isOpen: boolean;
+  createdAt: string;
+  closedAt: string | null;
+  participantCount: number;
+  owner: {
+    id: string;
+    name: string;
+    photos: Photo[];
+  };
+  participants: VoiceRoomParticipant[];
+};
+
+export async function getVoiceRoomTags(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/tags`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ tags: string[] }>(response);
+}
+
+export async function getVoiceRooms(accessToken: string, search = '') {
+  const params = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms${params}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ rooms: VoiceRoom[] }>(response);
+}
+
+export async function createVoiceRoom(accessToken: string, data: { name: string; tags: string[] }) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms`, {
+    method: 'POST',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return parseResponse<{ room: VoiceRoom }>(response);
+}
+
+export async function getVoiceRoom(accessToken: string, roomId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/${roomId}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ room: VoiceRoom }>(response);
+}
+
+export async function joinVoiceRoom(accessToken: string, roomId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/${roomId}/join`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{
+    room: VoiceRoom;
+    url: string;
+    token: string;
+    participant: { id: string; userId: string; isMutedByHost: boolean };
+  }>(response);
+}
+
+export async function leaveVoiceRoom(accessToken: string, roomId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/${roomId}/leave`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  if (response.status === 204) return;
+  return parseResponse<void>(response);
+}
+
+export async function closeVoiceRoom(accessToken: string, roomId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/${roomId}/close`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ room: VoiceRoom }>(response);
+}
+
+export async function muteVoiceRoomParticipant(
+  accessToken: string,
+  roomId: string,
+  userId: string,
+  muted: boolean
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/${roomId}/mute`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, muted }),
+  });
+  return parseResponse<{ room: VoiceRoom }>(response);
+}
+
 // ─── Photos ────────────────────────────────────────────────────────────────
 
 export type Photo = {

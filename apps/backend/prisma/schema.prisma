@@ -25,16 +25,18 @@ model User {
   location        Location?
   matchesAsUser1  Match[]          @relation("User1Matches")
   matchesAsUser2  Match[]          @relation("User2Matches")
-  messagesSent      Message[]
-  messageReactions  MessageReaction[]
-  photos            Photo[]
-  preferences       Preference?
-  privacySettings   PrivacySettings?
-  profile           Profile?
-  reportsReceived   Report[]          @relation("ReportedReports")
-  reportsGiven      Report[]          @relation("ReporterReports")
-  swipesGiven       Swipe[]           @relation("SwiperSwipes")
-  swipesReceived    Swipe[]           @relation("TargetSwipes")
+  messagesSent              Message[]
+  messageReactions          MessageReaction[]
+  photos                    Photo[]
+  preferences               Preference?
+  privacySettings           PrivacySettings?
+  profile                   Profile?
+  reportsReceived           Report[]                @relation("ReportedReports")
+  reportsGiven              Report[]                @relation("ReporterReports")
+  swipesGiven               Swipe[]                 @relation("SwiperSwipes")
+  swipesReceived            Swipe[]                 @relation("TargetSwipes")
+  ownedVoiceRooms           VoiceRoom[]             @relation("VoiceRoomOwner")
+  voiceRoomParticipations   VoiceRoomParticipant[]
 
   @@map("users")
 }
@@ -222,6 +224,38 @@ model PrivacySettings {
   user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("privacy_settings")
+}
+
+model VoiceRoom {
+  id              String                 @id @default(uuid())
+  ownerId         String                 @map("owner_id")
+  name            String
+  tags            String[]               @default([])
+  livekitRoomName String                 @unique @map("livekit_room_name")
+  isOpen          Boolean                @default(true) @map("is_open")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  closedAt        DateTime?              @map("closed_at")
+  owner           User                   @relation("VoiceRoomOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  participants    VoiceRoomParticipant[]
+
+  @@index([ownerId])
+  @@index([isOpen, createdAt])
+  @@map("voice_rooms")
+}
+
+model VoiceRoomParticipant {
+  id            String    @id @default(uuid())
+  roomId        String    @map("room_id")
+  userId        String    @map("user_id")
+  isMutedByHost Boolean   @default(false) @map("is_muted_by_host")
+  joinedAt      DateTime  @default(now()) @map("joined_at")
+  leftAt        DateTime? @map("left_at")
+  room          VoiceRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([userId])
+  @@map("voice_room_participants")
 }
 
 enum Gender {
