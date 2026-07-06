@@ -122,10 +122,7 @@ export default function PhotosScreen() {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
-      Alert.alert(
-        'Cannot set as primary',
-        msg || 'Could not update primary photo.',
-      );
+      Alert.alert('Cannot set as primary', msg || 'Could not update primary photo.');
     } finally {
       setBusyId(null);
     }
@@ -164,9 +161,7 @@ export default function PhotosScreen() {
         <ActivityIndicator style={styles.loader} color={colors.primary} size="large" />
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <Text style={styles.hint}>
-            Up to {MAX_SLOTS} photos · tap to manage · tap empty slot to add
-          </Text>
+          <Text style={styles.hint}>Tap a photo to set as primary or delete.</Text>
           <View style={styles.grid}>
             {Array.from({ length: MAX_SLOTS }).map((_, index) => {
               const photo = photos[index];
@@ -176,43 +171,50 @@ export default function PhotosScreen() {
               return (
                 <Pressable
                   key={index}
-                  style={[styles.slot, index === 0 && styles.primarySlot]}
+                  style={styles.slot}
                   onPress={() => handleSlotPress(index)}
                   disabled={isUploading || isBusy || (uploadingSlot !== null && !photo)}
                 >
                   {photo ? (
                     <>
-                    <Image
-                      source={{ uri: getDisplayPhotoUrl(photo, 'thumbnail') }}
-                      style={styles.photo}
-                      contentFit="cover"
-                    />
+                      <Image
+                        source={{ uri: getDisplayPhotoUrl(photo, 'thumbnail') }}
+                        style={styles.photo}
+                        contentFit="cover"
+                      />
                       {isBusy && (
-                        <View style={styles.overlay}>
+                        <View style={styles.busyOverlay}>
                           <ActivityIndicator color="#FFFFFF" />
                         </View>
                       )}
                       {photo.isPrimary && (
                         <View style={[styles.badge, photo.isVerified && styles.verifiedBadge]}>
                           {photo.isVerified && (
-                            <Ionicons name="checkmark-circle" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={11}
+                              color="#FFFFFF"
+                              style={{ marginRight: 3 }}
+                            />
                           )}
                           <Text style={styles.badgeText}>
-                            {photo.isVerified ? 'Photo Verified' : 'Primary'}
+                            {photo.isVerified ? 'Verified' : 'Primary'}
                           </Text>
                         </View>
                       )}
                       {!photo.isPrimary && !isBusy && (
-                        <View style={styles.starBadge}>
-                          <Ionicons name="star-outline" size={14} color="#FFFFFF" />
+                        <View style={styles.starHint}>
+                          <Ionicons name="star-outline" size={13} color="#FFFFFF" />
                         </View>
                       )}
                     </>
                   ) : isUploading ? (
-                    <ActivityIndicator color={colors.primary} />
+                    <View style={styles.emptySlot}>
+                      <ActivityIndicator color={colors.primary} />
+                    </View>
                   ) : (
-                    <View style={styles.empty}>
-                      <Ionicons name="add" size={30} color={colors.primary} />
+                    <View style={styles.emptySlot}>
+                      <Ionicons name="add" size={26} color={colors.grayIcon} />
                       <Text style={styles.emptyText}>Add photo</Text>
                     </View>
                   )}
@@ -240,20 +242,29 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: 22, fontWeight: '900' },
   loader: { flex: 1 },
   content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 40 },
-  hint: { color: colors.muted, fontSize: 13, textAlign: 'center', marginBottom: 20 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  hint: {
+    color: colors.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 18,
+    lineHeight: 19,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
   slot: {
     width: '31.3%',
-    aspectRatio: 0.78,
+    aspectRatio: 3 / 4,
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.line,
     overflow: 'hidden',
-    backgroundColor: '#FAFAFB',
+    backgroundColor: '#F4F4F6',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
   },
-  primarySlot: { width: '64.2%' },
   photo: { width: '100%', height: '100%' },
-  overlay: {
+  busyOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.45)',
     alignItems: 'center',
@@ -261,28 +272,28 @@ const styles = StyleSheet.create({
   },
   badge: {
     position: 'absolute',
-    left: 10,
-    bottom: 10,
-    borderRadius: 9,
+    left: 8,
+    bottom: 8,
+    borderRadius: 7,
     backgroundColor: colors.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
     flexDirection: 'row',
     alignItems: 'center',
   },
   verifiedBadge: { backgroundColor: '#22C55E' },
-  badgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '900' },
-  starBadge: {
+  badgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
+  starHint: {
     position: 'absolute',
     top: 8,
     right: 8,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(0,0,0,0.30)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 },
-  emptyText: { color: colors.primary, fontSize: 12, fontWeight: '800' },
+  emptySlot: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 5 },
+  emptyText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
 });

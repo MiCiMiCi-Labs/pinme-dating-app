@@ -118,32 +118,58 @@ export function PhotoUploadGrid({
   photos: Array<string | null>;
   primaryVerified?: boolean;
 }) {
+  const filledCount = photos.filter(Boolean).length;
+  const displaySlots = photos.slice(0, 4);
+  const overflowCount = filledCount > 4 ? filledCount - 4 : 0;
+
+  const subtitle = (() => {
+    if (filledCount === 0) return 'Add at least 3 photos to start matching';
+    if (filledCount === 1) return '1 photo · add 2 more to unlock matching';
+    if (filledCount === 2) return '2 photos · add 1 more to unlock matching';
+    return `${filledCount} photos added`;
+  })();
+
   return (
-    <Pressable onPress={() => router.push('/(main)/profile/photos')}>
-    <View style={styles.photoGrid}>
-      {photos.map((photo, index) => (
-        <View key={`${photo ?? 'empty'}-${index}`} style={[styles.photoSlot, index === 0 && styles.primaryPhoto]}>
-          {photo ? (
-            <Image source={{ uri: photo }} style={styles.photo} contentFit="cover" />
-          ) : (
-            <View style={styles.addPhoto}>
-              <Ionicons name="add" size={26} color={colors.primary} />
-              <Text style={styles.addText}>Upload</Text>
-            </View>
-          )}
-          {index === 0 ? (
-            <View style={[styles.primaryBadge, primaryVerified && styles.verifiedBadge]}>
-              {primaryVerified && (
-                <Ionicons name="checkmark-circle" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
-              )}
-              <Text style={styles.primaryBadgeText}>
-                {primaryVerified ? 'Photo Verified' : 'Primary'}
-              </Text>
-            </View>
-          ) : null}
+    <Pressable style={styles.photoCard} onPress={() => router.push('/(main)/profile/photos')}>
+      <View style={styles.photoCardHeader}>
+        <Text style={styles.photoTitle}>Photos</Text>
+        <View style={styles.manageBtn}>
+          <Text style={styles.manageBtnText}>Manage</Text>
+          <Ionicons name="chevron-forward" size={14} color={colors.primary} />
         </View>
-      ))}
-    </View>
+      </View>
+      <Text style={styles.photoSubtitle}>{subtitle}</Text>
+      <View style={styles.photoRow}>
+        {displaySlots.map((photo, index) => {
+          const showOverflow = index === 3 && overflowCount > 0;
+          return (
+            <View key={`photo-slot-${index}`} style={styles.photoTile}>
+              {photo ? (
+                <>
+                  <Image source={{ uri: photo }} style={styles.tileImage} contentFit="cover" />
+                  {index === 0 && (
+                    <View style={[styles.tileBadge, primaryVerified && styles.tileBadgeVerified]}>
+                      {primaryVerified && (
+                        <Ionicons name="checkmark-circle" size={10} color="#FFFFFF" style={{ marginRight: 3 }} />
+                      )}
+                      <Text style={styles.tileBadgeText}>{primaryVerified ? 'Verified' : 'Main'}</Text>
+                    </View>
+                  )}
+                  {showOverflow && (
+                    <View style={styles.overflowOverlay}>
+                      <Text style={styles.overflowText}>+{overflowCount}</Text>
+                    </View>
+                  )}
+                </>
+              ) : (
+                <View style={styles.tileEmpty}>
+                  <Ionicons name="add" size={20} color={colors.primary} />
+                </View>
+              )}
+            </View>
+          );
+        })}
+      </View>
     </Pressable>
   );
 }
@@ -224,55 +250,90 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     padding: 0,
   },
-  photoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  photoSlot: {
-    width: '31.3%',
-    aspectRatio: 0.78,
-    borderRadius: 12,
+  photoCard: {
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+    marginBottom: 18,
+  },
+  photoCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  photoTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  manageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  manageBtnText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  photoSubtitle: {
+    color: colors.muted,
+    fontSize: 12,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  photoRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  photoTile: {
+    flex: 1,
+    aspectRatio: 3 / 4,
+    borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: '#FAFAFB',
+    backgroundColor: '#F4F4F6',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
   },
-  primaryPhoto: {
-    width: '64.2%',
-  },
-  photo: {
+  tileImage: {
     width: '100%',
     height: '100%',
   },
-  addPhoto: {
+  tileEmpty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
   },
-  addText: {
-    color: colors.primary,
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  primaryBadge: {
+  tileBadge: {
     position: 'absolute',
-    left: 10,
-    bottom: 10,
-    borderRadius: 9,
+    bottom: 6,
+    left: 6,
+    borderRadius: 6,
     backgroundColor: colors.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  verifiedBadge: {
+  tileBadgeVerified: {
     backgroundColor: '#22C55E',
   },
-  primaryBadgeText: {
+  tileBadgeText: {
     color: '#FFFFFF',
-    fontSize: 11,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  overflowOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  overflowText: {
+    color: '#FFFFFF',
+    fontSize: 20,
     fontWeight: '900',
   },
 });
