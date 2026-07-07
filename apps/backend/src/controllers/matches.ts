@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { getMatchIntimacy } from '../lib/intimacy';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -69,19 +70,23 @@ export async function getMatches(req: Request, res: Response) {
     const result = await Promise.all(matches.map(async (match) => {
       const other = match.user1Id === dbUserId ? match.user2 : match.user1;
       const { birthday, ...otherFields } = other;
-      const unreadCount = await prisma.message.count({
-        where: {
-          matchId: match.id,
-          senderId: { not: dbUserId },
-          isRead: false,
-        },
-      });
+      const [unreadCount, intimacy] = await Promise.all([
+        prisma.message.count({
+          where: {
+            matchId: match.id,
+            senderId: { not: dbUserId },
+            isRead: false,
+          },
+        }),
+        getMatchIntimacy(match.id, match.user1Id, match.user2Id),
+      ]);
 
       return {
         matchId: match.id,
         createdAt: match.createdAt,
         lastMessage: match.messages[0] ?? null,
         unreadCount,
+        intimacy,
         user: { ...otherFields, age: calculateAge(birthday) },
       };
     }));

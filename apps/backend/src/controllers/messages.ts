@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { supabase } from '../lib/supabase';
 import { CHAT_MEDIA_BUCKET, VOICE_BUCKET } from '../lib/storage';
+import { getMatchIntimacy } from '../lib/intimacy';
 
 const sendMessageSchema = z
   .object({
@@ -108,7 +109,8 @@ export async function getMessages(req: Request, res: Response) {
       return;
     }
 
-    const messages = await prisma.message.findMany({
+    const [messages, intimacy] = await Promise.all([
+      prisma.message.findMany({
       where: {
         matchId,
         ...(before ? { createdAt: { lt: new Date(before) } } : {}),
@@ -120,10 +122,13 @@ export async function getMessages(req: Request, res: Response) {
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
-    });
+      }),
+      getMatchIntimacy(matchId, access.match.user1Id, access.match.user2Id),
+    ]);
 
     res.json({
       messages: messages.reverse(),
+      intimacy,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });

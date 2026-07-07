@@ -22,6 +22,16 @@ function getPrimaryPhoto(match: ChatMatch) {
   return primary ? getDisplayPhotoUrl(primary, 'thumbnail') : photos.redhead;
 }
 
+function getIntimacyHeartColor(color: ChatMatch['intimacy']['color']) {
+  switch (color) {
+    case 'yellow': return '#F5B833';
+    case 'pink': return '#F472B6';
+    case 'red': return '#E5485C';
+    case 'purple': return '#8B5CF6';
+    default: return '#FFFFFF';
+  }
+}
+
 function formatRelativeTime(value: string) {
   const diffMs = Date.now() - new Date(value).getTime();
   const diffMinutes = Math.max(0, Math.floor(diffMs / 60000));
@@ -162,6 +172,7 @@ export default function ChatListScreen() {
                 time={formatRelativeTime(match.lastMessage?.createdAt ?? match.createdAt)}
                 unread={match.unreadCount}
                 image={getPrimaryPhoto(match)}
+                intimacyColor={getIntimacyHeartColor(match.intimacy?.color ?? 'white')}
                 showDivider={index < filteredMatches.length - 1}
                 onPress={() => router.push({
                   pathname: '/(main)/chats/[matchId]',

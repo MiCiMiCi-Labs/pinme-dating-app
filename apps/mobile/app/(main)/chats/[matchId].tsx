@@ -31,6 +31,7 @@ import {
   sendVideoMessage,
   sendVoiceMessage,
   toggleReaction,
+  type ChatIntimacy,
   type ChatMessage,
   type Reaction,
   type ReplyPreview,
@@ -55,6 +56,25 @@ const REPLY_TONES: Array<{ value: ReplyTone; label: string }> = [
   { value: 'playful', label: 'Playful' },
   { value: 'curious', label: 'Curious' },
 ];
+
+const DEFAULT_INTIMACY: ChatIntimacy = {
+  level: 0,
+  label: 'New',
+  color: 'white',
+  score: 0,
+  mutualDays: 0,
+  currentStreakDays: 0,
+};
+
+function getIntimacyHeartColor(color: ChatIntimacy['color']) {
+  switch (color) {
+    case 'yellow': return '#F5B833';
+    case 'pink': return '#F472B6';
+    case 'red': return '#E5485C';
+    case 'purple': return '#8B5CF6';
+    default: return '#FFFFFF';
+  }
+}
 
 type LocalChatMessage = ChatMessage & { _status?: 'sending' | 'failed' };
 
@@ -211,6 +231,7 @@ export default function ChatRoomScreen() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryPayloads = useRef<Map<string, RetryPayload>>(new Map());
   const [messages, setMessages] = useState<LocalChatMessage[]>([]);
+  const [intimacy, setIntimacy] = useState<ChatIntimacy>(DEFAULT_INTIMACY);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
@@ -254,9 +275,12 @@ export default function ChatRoomScreen() {
       if (!session?.access_token) return;
 
       let loadedMessages: ChatMessage[];
+      let loadedIntimacy: ChatIntimacy;
 
       if (currentUserIdRef.current) {
-        ({ messages: loadedMessages } = await getMessages(session.access_token, matchId));
+        const messagesResponse = await getMessages(session.access_token, matchId);
+        loadedMessages = messagesResponse.messages;
+        loadedIntimacy = messagesResponse.intimacy ?? DEFAULT_INTIMACY;
       } else {
         const [{ user }, messagesResponse] = await Promise.all([
           getCurrentAppUser(session.access_token),
@@ -266,8 +290,10 @@ export default function ChatRoomScreen() {
         currentUserIdRef.current = user.id;
         setCurrentUserId(user.id);
         loadedMessages = messagesResponse.messages;
+        loadedIntimacy = messagesResponse.intimacy ?? DEFAULT_INTIMACY;
       }
 
+      setIntimacy(loadedIntimacy);
       setMessages(current => {
         const serverConfirmed = current.filter(m => !m._status);
         if (messagesAreEqual(serverConfirmed, loadedMessages)) return current;
@@ -866,6 +892,9 @@ export default function ChatRoomScreen() {
               <View style={styles.onlineRow}>
                 <View style={styles.onlineDot} />
                 <Text style={styles.online}>Matched</Text>
+                <View style={styles.intimacyPill}>
+                  <Text style={[styles.intimacyHeart, { color: getIntimacyHeartColor(intimacy.color) }]}>♥</Text>
+                </View>
               </View>
             </View>
           </View>
@@ -1505,6 +1534,22 @@ const styles = StyleSheet.create({
   online: {
     color: colors.muted,
     fontSize: 12,
+  },
+  intimacyPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: colors.soft,
+    marginLeft: 3,
+  },
+  intimacyHeart: {
+    fontSize: 13,
+    fontWeight: '900',
+    textShadowColor: 'rgba(0,0,0,0.16)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1,
   },
   dayRow: {
     flexDirection: 'row',
