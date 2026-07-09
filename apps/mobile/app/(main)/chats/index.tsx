@@ -64,7 +64,8 @@ function getPreview(match: ChatMatch) {
 export default function ChatListScreen() {
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const { data: matches = [], isLoading, error, refetch } = useChatMatches();
+  const { data, isLoading, error, refetch } = useChatMatches();
+  const matches = Array.isArray(data) ? data : [];
 
   const filteredMatches = useMemo(() => {
     const trimmed = query.trim().toLowerCase();

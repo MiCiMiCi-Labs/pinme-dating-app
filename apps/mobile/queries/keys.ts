@@ -1,8 +1,8 @@
 export const queryKeys = {
-  currentUser: ['user', 'current'] as const,
-  myProfile: ['profile', 'me'] as const,
-  myPhotos: ['photos', 'me'] as const,
-  chatMatches: ['chat', 'matches'] as const,
-  messages: (matchId: string) => ['chat', 'messages', matchId] as const,
-  discoveryFeed: ['discovery', 'feed'] as const,
+  currentUser: (userId: string) => ['user', userId, 'current'] as const,
+  myProfile: (userId: string) => ['profile', userId, 'me'] as const,
+  myPhotos: (userId: string) => ['photos', userId, 'me'] as const,
+  chatMatches: (userId: string) => ['chat', userId, 'matches'] as const,
+  messages: (userId: string, matchId: string) => ['chat', userId, 'messages', matchId] as const,
+  discoveryFeed: (userId: string) => ['discovery', userId, 'feed'] as const,
 };

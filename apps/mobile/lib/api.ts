@@ -598,7 +598,10 @@ export async function getChatMatches(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
     headers: authHeaders(accessToken),
   });
-  return parseResponse<ChatMatch[]>(response);
+  const data = await parseResponse<ChatMatch[] | { matches?: ChatMatch[] }>(response);
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.matches)) return data.matches;
+  return [];
 }
 
 export async function getMessages(accessToken: string, matchId: string, limit = 50) {

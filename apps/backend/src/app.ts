@@ -7,12 +7,14 @@ import preferencesRoutes from './routes/preferences';
 import discoveryRoutes from './routes/discovery';
 import { router } from './routes';
 import { errorHandler } from './middleware/errorHandler';
+import { slowRequestLogger } from './middleware/slowRequestLogger';
 
 const app = express();
 
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use(slowRequestLogger);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

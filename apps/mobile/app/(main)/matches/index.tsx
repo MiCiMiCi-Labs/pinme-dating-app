@@ -66,7 +66,7 @@ export default function MatchesScreen() {
                   <Pressable
                     key={matchId}
                     style={styles.card}
-                    onPress={() => router.push({ pathname: '/(main)/discover/[userId]', params: { userId: user.id } })}
+                    onPress={() => router.push({ pathname: '/(main)/matches/[userId]', params: { userId: user.id } })}
                   >
                     {primaryPhoto ? (
                       <Image source={{ uri: primaryPhoto }} style={styles.cardImage} contentFit="cover" />
