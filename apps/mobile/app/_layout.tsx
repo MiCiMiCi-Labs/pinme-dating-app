@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -7,6 +8,19 @@ import { AuthProvider, useAuth } from '@/contexts/auth';
 import { colors } from '@/design/system';
 
 SplashScreen.preventAutoHideAsync();
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      retry: 1,
+      refetchOnMount: false,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 function RootNavigator() {
   const { session, loading, profileComplete, profileCompletionLoading } = useAuth();
@@ -94,9 +108,11 @@ function LoadingScreen() {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootNavigator />
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </QueryClientProvider>
   );
 }
 

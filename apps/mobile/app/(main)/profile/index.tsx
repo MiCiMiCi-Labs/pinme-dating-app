@@ -1,13 +1,10 @@
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { EditableField, EditableTextArea, FormSection, PhotoUploadGrid } from '@/components/form';
 import { colors, IconButton, PrimaryButton } from '@/design/system';
 import {
-  getCurrentAppUser,
-  getMyPhotos,
-  updateMyProfileData,
   type AppUser,
   type Photo,
   type RelationshipGoal,
@@ -18,6 +15,8 @@ import {
 } from '@/lib/profileCompleteness';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
+import { useCurrentUser } from '@/queries/user.queries';
+import { useMyPhotos, useUpdateMyProfile } from '@/queries/profile.queries';
 
 type ProfileDraft = {
   city: string;
@@ -206,10 +205,23 @@ export default function MyProfileScreen() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft);
   const [photos, setPhotos] = useState<Photo[]>([]);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [customInterest, setCustomInterest] = useState('');
-  const hasLoadedRef = useRef(false);
+  const currentUserQuery = useCurrentUser();
+  const photosQuery = useMyPhotos();
+  const updateProfileMutation = useUpdateMyProfile();
+  const loading = currentUserQuery.isLoading || photosQuery.isLoading;
+
+  useEffect(() => {
+    if (!currentUserQuery.data?.user) return;
+    setUser(currentUserQuery.data.user);
+    setDraft(draftFromUser(currentUserQuery.data.user));
+  }, [currentUserQuery.data?.user]);
+
+  useEffect(() => {
+    if (!photosQuery.data) return;
+    setPhotos(photosQuery.data);
+  }, [photosQuery.data]);
 
   const photoSlots = useMemo(() => {
     const sorted = [
@@ -233,52 +245,14 @@ export default function MyProfileScreen() {
     [user, photos]
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-
-      async function loadProfile() {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session) return;
-
-        try {
-          if (!hasLoadedRef.current) setLoading(true);
-          const [{ user: appUser }, loadedPhotos] = await Promise.all([
-            getCurrentAppUser(session.access_token),
-            getMyPhotos(session.access_token),
-          ]);
-
-          if (!cancelled) {
-            setUser(appUser);
-            setDraft(draftFromUser(appUser));
-            setPhotos(loadedPhotos);
-            hasLoadedRef.current = true;
-          }
-        } catch (error) {
-          if (!cancelled) {
-            Alert.alert(
-              'Profile error',
-              error instanceof Error ? error.message : 'Failed to load profile.'
-            );
-          }
-        } finally {
-          if (!cancelled) {
-            hasLoadedRef.current = true;
-            setLoading(false);
-          }
-        }
-      }
-
-      loadProfile();
-
-      return () => {
-        cancelled = true;
-      };
-    }, [])
-  );
+  useEffect(() => {
+    const error = currentUserQuery.error ?? photosQuery.error;
+    if (!error) return;
+    Alert.alert(
+      'Profile error',
+      error instanceof Error ? error.message : 'Failed to load profile.'
+    );
+  }, [currentUserQuery.error, photosQuery.error]);
 
   const set = (key: keyof ProfileDraft) => (value: string) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -366,20 +340,11 @@ export default function MyProfileScreen() {
       return;
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      router.replace('/(auth)/login');
-      return;
-    }
-
     setSaving(true);
 
     try {
       const hiddenFields = draft.hiddenFields.filter((field) => field !== 'relationshipStyle');
-      const result = await updateMyProfileData(session.access_token, {
+      const result = await updateProfileMutation.mutateAsync({
         city: nullable(draft.city),
         bio: nullable(draft.bio),
         height: draft.height ? Number(draft.height) : null,
