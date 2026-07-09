@@ -1,44 +1,19 @@
 import { Image } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback } from 'react';
+import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { colors, IconButton } from '@/design/system';
-import { getChatMatches, type ChatMatch } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { supabase } from '@/lib/supabase';
+import { useChatMatches } from '@/queries/chat.queries';
 
 export default function MatchesScreen() {
-  const [matches, setMatches] = useState<ChatMatch[]>([]);
-  const [loading, setLoading] = useState(true);
-  const hasLoadedRef = useRef(false);
+  const { data, isLoading, refetch } = useChatMatches();
+  const matches = Array.isArray(data) ? data : [];
 
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-
-      async function load() {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        if (!hasLoadedRef.current) setLoading(true);
-        try {
-          const data = await getChatMatches(session.access_token);
-          if (!cancelled) {
-            setMatches(data);
-            hasLoadedRef.current = true;
-          }
-        } catch (_) {
-          // keep existing state
-        } finally {
-          if (!cancelled) {
-            hasLoadedRef.current = true;
-            setLoading(false);
-          }
-        }
-      }
-
-      load();
-      return () => { cancelled = true; };
-    }, [])
+      refetch();
+    }, [refetch])
   );
 
   return (
@@ -47,43 +22,50 @@ export default function MatchesScreen() {
         <Text style={styles.title}>Matches</Text>
         <IconButton icon="options-outline" />
       </View>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {loading ? (
-          <ActivityIndicator color={colors.primary} style={styles.loader} />
-        ) : matches.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No matches yet</Text>
-            <Text style={styles.emptySubtext}>Keep swiping to find your match!</Text>
-          </View>
-        ) : (
-          <>
-            <Text style={styles.sectionTitle}>New matches</Text>
-            <View style={styles.grid}>
-              {matches.map(({ matchId, user }) => {
-                const primary = user.photos.find(p => p.isPrimary) ?? user.photos[0];
-                const primaryPhoto = primary ? getDisplayPhotoUrl(primary, 'thumbnail') : '';
-                return (
-                  <Pressable
-                    key={matchId}
-                    style={styles.card}
-                    onPress={() => router.push({ pathname: '/(main)/matches/[userId]', params: { userId: user.id } })}
-                  >
-                    {primaryPhoto ? (
-                      <Image source={{ uri: primaryPhoto }} style={styles.cardImage} contentFit="cover" />
-                    ) : (
-                      <View style={[styles.cardImage, styles.cardImagePlaceholder]} />
-                    )}
-                    <View style={styles.cardFooter}>
-                      <Text style={styles.cardName}>{user.name}</Text>
-                      <Text style={styles.cardMeta}>{user.age}{user.city ? ` · ${user.city}` : ''}</Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
+      <FlatList
+        data={matches}
+        keyExtractor={({ matchId }) => matchId}
+        numColumns={2}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        columnWrapperStyle={styles.row}
+        ItemSeparatorComponent={() => <View style={styles.rowGap} />}
+        renderItem={({ item: { matchId, user } }) => {
+          const primary = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+          const primaryPhotoUrl = primary ? getDisplayPhotoUrl(primary, 'thumbnail') : '';
+          return (
+            <Pressable
+              style={styles.card}
+              onPress={() => router.push({ pathname: '/(main)/matches/[userId]', params: { userId: user.id } })}
+            >
+              {primaryPhotoUrl ? (
+                <Image source={{ uri: primaryPhotoUrl }} style={styles.cardImage} contentFit="cover" />
+              ) : (
+                <View style={[styles.cardImage, styles.cardImagePlaceholder]} />
+              )}
+              <View style={styles.cardFooter}>
+                <Text style={styles.cardName}>{user.name}</Text>
+                <Text style={styles.cardMeta}>{user.age}{user.city ? ` · ${user.city}` : ''}</Text>
+              </View>
+            </Pressable>
+          );
+        }}
+        ListHeaderComponent={
+          <Text style={styles.sectionTitle}>New matches</Text>
+        }
+        ListEmptyComponent={
+          isLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator color={colors.primary} />
             </View>
-          </>
-        )}
-      </ScrollView>
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No matches yet</Text>
+              <Text style={styles.emptySubtext}>Keep swiping to find your match!</Text>
+            </View>
+          )
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -111,8 +93,18 @@ const styles = StyleSheet.create({
     paddingBottom: 34,
     flexGrow: 1,
   },
-  loader: {
-    marginTop: 60,
+  row: {
+    gap: 14,
+  },
+  rowGap: {
+    height: 14,
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 20,
+    marginBottom: 16,
   },
   emptyState: {
     flex: 1,
@@ -130,20 +122,8 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 14,
   },
-  sectionTitle: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: '900',
-    marginTop: 20,
-    marginBottom: 16,
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 14,
-  },
   card: {
-    width: '47%',
+    flex: 1,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: colors.line,

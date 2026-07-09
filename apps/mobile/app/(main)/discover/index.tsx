@@ -1,7 +1,8 @@
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
+import { DiscoverCard, DiscoverySkeleton, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
 import { type DiscoveryUser } from '@/lib/api';
 import { cacheDiscoveryUsers } from '@/lib/discovery-cache';
@@ -28,6 +29,7 @@ export default function SwipeScreen() {
 
   const pan = useRef(new Animated.ValueXY()).current;
   const swipingRef = useRef(false);
+  const feedLoadedRef = useRef(false);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
   const currentUserQuery = useCurrentUser();
@@ -54,17 +56,25 @@ export default function SwipeScreen() {
     if (!canDiscover) {
       setUsers([]);
       setCurrentIndex(0);
+      feedLoadedRef.current = false;
       return;
     }
-
     const feed = feedQuery.data?.users;
-    if (!feed) return;
-
+    if (!feed || feedLoadedRef.current) return;
+    feedLoadedRef.current = true;
     cacheDiscoveryUsers(feed);
     setUsers(filterSwiped(feed));
     setCurrentIndex(0);
     pan.setValue({ x: 0, y: 0 });
   }, [canDiscover, feedQuery.data?.users, pan]);
+
+  useEffect(() => {
+    const nextUser = users[currentIndex + 1];
+    if (!nextUser) return;
+    const primary = nextUser.photos.find(p => p.isPrimary) ?? nextUser.photos[0];
+    if (!primary) return;
+    Image.prefetch(getDisplayPhotoUrl(primary, 'thumbnail')).catch(() => {});
+  }, [users, currentIndex]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -145,9 +155,10 @@ export default function SwipeScreen() {
       />
 
       <View style={[styles.deck, { height: cardHeight + 38 }]}>
-        {!loading &&
-        profileCompletionPercent !== null &&
-        profileCompletionPercent < matchingProfileCompletionThreshold ? (
+        {loading ? (
+          <DiscoverySkeleton height={cardHeight} />
+        ) : profileCompletionPercent !== null &&
+          profileCompletionPercent < matchingProfileCompletionThreshold ? (
           <View style={styles.lockedState}>
             <Text style={styles.emptyTitle}>Complete your profile first</Text>
             <Text style={styles.emptySubtext}>
@@ -157,7 +168,7 @@ export default function SwipeScreen() {
               Improve profile
             </PrimaryButton>
           </View>
-        ) : !loading && !currentUser ? (
+        ) : !currentUser ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>You're all caught up</Text>
             <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
@@ -167,15 +178,13 @@ export default function SwipeScreen() {
             {users[currentIndex + 1] ? (
               <View style={[styles.backCard, { height: cardHeight + 10 }]} />
             ) : null}
-            {currentUser ? (
-              <DiscoverCard
-                key={currentUser.id}
-                user={currentUser}
-                height={cardHeight}
-                pan={pan}
-                panHandlers={panResponder.panHandlers}
-              />
-            ) : null}
+            <DiscoverCard
+              key={currentUser.id}
+              user={currentUser}
+              height={cardHeight}
+              pan={pan}
+              panHandlers={panResponder.panHandlers}
+            />
           </>
         )}
       </View>
@@ -192,6 +201,7 @@ export default function SwipeScreen() {
         <FilterSheet
           onClose={() => setFilterOpen(false)}
           onApply={() => {
+            feedLoadedRef.current = false;
             feedQuery.refetch();
           }}
         />

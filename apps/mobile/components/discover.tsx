@@ -381,6 +381,28 @@ export function MatchOverlay({
   );
 }
 
+export function DiscoverySkeleton({ height }: { height: number }) {
+  const pulse = useRef(new Animated.Value(0.65)).current;
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.65, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [pulse]);
+  return (
+    <Animated.View style={[styles.card, { height, opacity: pulse }]}>
+      <View style={styles.skeletonTextBlock}>
+        <View style={styles.skeletonName} />
+        <View style={styles.skeletonRole} />
+      </View>
+    </Animated.View>
+  );
+}
+
 function RangeRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.rangeHeader}>
@@ -651,4 +673,23 @@ const styles = StyleSheet.create({
   matchTitle: { color: colors.primary, fontSize: 30, fontWeight: '900', textAlign: 'center' },
   matchCopy: { color: colors.muted, marginTop: 10, marginBottom: 88, textAlign: 'center' },
   matchActions: { alignSelf: 'stretch', gap: 20 },
+  skeletonTextBlock: {
+    position: 'absolute',
+    bottom: 22,
+    left: 18,
+    right: 18,
+    gap: 8,
+  },
+  skeletonName: {
+    height: 22,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    width: '68%',
+  },
+  skeletonRole: {
+    height: 14,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    width: '42%',
+  },
 });
