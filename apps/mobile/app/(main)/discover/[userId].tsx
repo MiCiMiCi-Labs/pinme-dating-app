@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, SafeAreaView, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
 import { colors } from '@/design/system';
 import { createSwipe, getUserById, type PublicUser } from '@/lib/api';
@@ -14,6 +14,7 @@ export default function ProfileDetailScreen() {
   const { session } = useAuth();
   const [user, setUser] = useState<PublicUser | null>(() => getCachedDiscoveryUser(userId));
   const [loading, setLoading] = useState(!getCachedDiscoveryUser(userId));
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [liked, setLiked] = useState(false);
   const [stamp, setStamp] = useState<'like' | 'nope' | null>(null);
   const stampOpacity = useRef(new Animated.Value(0)).current;
@@ -29,8 +30,9 @@ export default function ProfileDetailScreen() {
       try {
         const { user: data } = await getUserById(session.access_token, userId);
         if (!cancelled) setUser(data);
-      } catch (_) {
-        // keep null — ProfileDetailContent handles missing state
+      } catch (err) {
+        console.error('[ProfileDetail] getUserById failed:', err);
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load profile');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -104,11 +106,23 @@ export default function ProfileDetailScreen() {
     showStamp('nope', () => router.back());
   };
 
-  if (loading) {
+  if (loading && !user) {
+    return (
+      <SafeAreaView style={styles.screen}>
+        <View style={[styles.skeletonHero, { height: carouselHeight }]} />
+        <View style={styles.skeletonBody}>
+          <View style={styles.skeletonLine} />
+          <View style={[styles.skeletonLine, { width: '48%', height: 14, marginTop: 0 }]} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError && !user) {
     return (
       <SafeAreaView style={styles.screen}>
         <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} size="large" />
+          <Text style={styles.errorText}>{loadError}</Text>
         </View>
       </SafeAreaView>
     );
@@ -160,6 +174,26 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  errorText: {
+    color: colors.muted,
+    fontSize: 14,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  skeletonHero: {
+    backgroundColor: colors.line,
+  },
+  skeletonBody: {
+    paddingHorizontal: 28,
+    paddingTop: 24,
+    gap: 12,
+  },
+  skeletonLine: {
+    height: 22,
+    borderRadius: 8,
+    backgroundColor: colors.line,
+    width: '65%',
   },
   stamp: {
     position: 'absolute',

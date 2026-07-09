@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   RefreshControl,
   SafeAreaView,
   ScrollView,
@@ -77,9 +78,11 @@ export default function ChatListScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={styles.content}
+      <FlatList
+        data={filteredMatches}
+        keyExtractor={match => match.matchId}
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -90,80 +93,78 @@ export default function ChatListScreen() {
             }}
           />
         }
-      >
-        <View style={styles.header}>
-          <Text style={styles.title}>Messages</Text>
-          <IconButton icon="refresh-outline" onPress={() => refetch()} />
-        </View>
-
-        <View style={styles.search}>
-          <Ionicons name="search-outline" size={20} color={colors.grayIcon} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search"
-            placeholderTextColor={colors.grayIcon}
-            style={styles.searchInput}
+        renderItem={({ item: match, index }) => (
+          <ChatPreviewRow
+            name={match.user.name}
+            text={getPreview(match)}
+            time={formatRelativeTime(match.lastMessage?.createdAt ?? match.createdAt)}
+            unread={match.unreadCount}
+            image={getPrimaryPhoto(match)}
+            intimacyColor={getIntimacyHeartColor(match.intimacy?.color ?? 'white')}
+            showDivider={index < filteredMatches.length - 1}
+            onPress={() => router.push({
+              pathname: '/(main)/chats/[matchId]',
+              params: {
+                matchId: match.matchId,
+                name: match.user.name,
+                photoUrl: getPrimaryPhoto(match),
+              },
+            })}
           />
-        </View>
-
-        <Text style={styles.sectionTitle}>Activities</Text>
-        {activityMatches.length ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.activityRow}>
-            {activityMatches.map(match => (
-              <View key={match.matchId} style={styles.activityItem}>
-                <View style={styles.activityRing}>
-                  <ProfileThumb uri={getPrimaryPhoto(match)} size={58} />
-                </View>
-                <Text style={styles.activityName} numberOfLines={1}>{match.user.name}</Text>
-              </View>
-            ))}
-          </ScrollView>
-        ) : (
-          <Text style={styles.emptyCopy}>Your matches will appear here.</Text>
         )}
-
-        <Text style={styles.sectionTitle}>Messages</Text>
-        {isLoading ? (
-          <View style={styles.centerState}>
-            <ActivityIndicator color={colors.primary} />
-          </View>
-        ) : error ? (
-          <View style={styles.centerState}>
-            <Text style={styles.errorText}>
-              {error instanceof Error ? error.message : 'Failed to load chats'}
-            </Text>
-          </View>
-        ) : filteredMatches.length ? (
-          <View style={styles.list}>
-            {filteredMatches.map((match, index) => (
-              <ChatPreviewRow
-                key={match.matchId}
-                name={match.user.name}
-                text={getPreview(match)}
-                time={formatRelativeTime(match.lastMessage?.createdAt ?? match.createdAt)}
-                unread={match.unreadCount}
-                image={getPrimaryPhoto(match)}
-                intimacyColor={getIntimacyHeartColor(match.intimacy?.color ?? 'white')}
-                showDivider={index < filteredMatches.length - 1}
-                onPress={() => router.push({
-                  pathname: '/(main)/chats/[matchId]',
-                  params: {
-                    matchId: match.matchId,
-                    name: match.user.name,
-                    photoUrl: getPrimaryPhoto(match),
-                  },
-                })}
+        ListHeaderComponent={
+          <View>
+            <View style={styles.header}>
+              <Text style={styles.title}>Messages</Text>
+              <IconButton icon="refresh-outline" onPress={() => refetch()} />
+            </View>
+            <View style={styles.search}>
+              <Ionicons name="search-outline" size={20} color={colors.grayIcon} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search"
+                placeholderTextColor={colors.grayIcon}
+                style={styles.searchInput}
               />
-            ))}
+            </View>
+            <Text style={styles.sectionTitle}>Activities</Text>
+            {activityMatches.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.activityRow}>
+                {activityMatches.map(match => (
+                  <View key={match.matchId} style={styles.activityItem}>
+                    <View style={styles.activityRing}>
+                      <ProfileThumb uri={getPrimaryPhoto(match)} size={58} />
+                    </View>
+                    <Text style={styles.activityName} numberOfLines={1}>{match.user.name}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={styles.emptyCopy}>Your matches will appear here.</Text>
+            )}
+            <Text style={styles.sectionTitle}>Messages</Text>
           </View>
-        ) : (
-          <View style={styles.centerState}>
-            <Text style={styles.emptyTitle}>No chats yet</Text>
-            <Text style={styles.emptyCopy}>When you match with someone, you can start chatting here.</Text>
-          </View>
-        )}
-      </ScrollView>
+        }
+        ListEmptyComponent={
+          isLoading ? (
+            <View style={styles.centerState}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : error ? (
+            <View style={styles.centerState}>
+              <Text style={styles.errorText}>
+                {error instanceof Error ? error.message : 'Failed to load chats'}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.centerState}>
+              <Text style={styles.emptyTitle}>No chats yet</Text>
+              <Text style={styles.emptyCopy}>When you match with someone, you can start chatting here.</Text>
+            </View>
+          )
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -234,9 +235,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     maxWidth: 70,
-  },
-  list: {
-    gap: 0,
   },
   centerState: {
     minHeight: 140,

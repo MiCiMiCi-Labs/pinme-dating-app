@@ -44,6 +44,12 @@ import { STICKERS } from '@/lib/stickers';
 import { useAccessToken } from '@/queries/auth';
 import { useMessages } from '@/queries/chat.queries';
 import { useCurrentUser } from '@/queries/user.queries';
+import { GifBubble } from '@/components/chat/GifBubble';
+import { ImageBubble } from '@/components/chat/ImageBubble';
+import { TextBubble } from '@/components/chat/TextBubble';
+import { VideoBubble } from '@/components/chat/VideoBubble';
+import { VoiceBubble } from '@/components/chat/VoiceBubble';
+import { formatMessageTime, getReplyPreviewText } from '@/components/chat/chatUtils';
 
 const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 5000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
@@ -91,37 +97,8 @@ function logRealtimeStatus(matchId: string, status: string) {
   console.log(`[chat realtime] ${matchId}: ${status} at ${new Date().toISOString()}`);
 }
 
-function formatMessageTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value));
-}
-
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
-}
-
-function getReplyPreviewText(msg: ReplyPreview): string {
-  if (msg.recalledAt) return 'Message recalled';
-  switch (msg.messageType) {
-    case 'IMAGE': return '📷 Photo';
-    case 'VIDEO': return '🎬 Video';
-    case 'VOICE': return '🎤 Voice message';
-    case 'GIF': return '🎞 GIF';
-    default: return msg.content.length > 60 ? `${msg.content.slice(0, 60)}…` : msg.content;
-  }
-}
-
-function groupReactions(reactions: Reaction[]): { emoji: string; count: number; userIds: string[] }[] {
-  const map = new Map<string, { count: number; userIds: string[] }>();
-  for (const r of reactions) {
-    const entry = map.get(r.emoji) ?? { count: 0, userIds: [] };
-    entry.count++;
-    entry.userIds.push(r.userId);
-    map.set(r.emoji, entry);
-  }
-  return Array.from(map.entries()).map(([emoji, { count, userIds }]) => ({ emoji, count, userIds }));
 }
 
 type RealtimeMessageRow = {
@@ -184,12 +161,13 @@ function mergeMessage(current: LocalChatMessage[], incoming: LocalChatMessage): 
     sender: incoming.sender ?? existing.sender,
     replyTo: incoming.replyTo ?? existing.replyTo,
     // Realtime events carry reactions: [] — preserve existing reactions in that case
-    reactions: incoming.reactions.length > 0 ? incoming.reactions : existing.reactions,
+    reactions: (incoming.reactions?.length ?? 0) > 0 ? incoming.reactions : existing.reactions,
   };
   return next;
 }
 
-function reactionsSignature(reactions: Reaction[]): string {
+function reactionsSignature(reactions: Reaction[] | undefined | null): string {
+  if (!reactions) return '';
   return reactions
     .slice()
     .sort((a, b) => a.userId.localeCompare(b.userId))
@@ -940,32 +918,13 @@ export default function ChatRoomScreen() {
                 }
 
                 const mine = message.senderId === currentUserId;
-                const reactionGroups = groupReactions(message.reactions);
-                const reactionsRow = reactionGroups.length > 0 ? (
-                  <View style={styles.reactionsRow}>
-                    {reactionGroups.map(({ emoji, count, userIds }) => (
-                      <Pressable
-                        key={emoji}
-                        style={[styles.reactionChip, userIds.includes(currentUserId ?? '') && styles.reactionChipMine]}
-                        onPress={() => handleToggleReaction(message.id, emoji)}
-                      >
-                        <Text style={styles.reactionChipText}>{emoji} {count}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null;
-
-                const statusIndicator = message._status === 'sending' ? (
-                  <View style={[styles.statusRow, mine && styles.statusRowMine]}>
-                    <ActivityIndicator size="small" color={colors.muted} style={styles.statusSpinner} />
-                    <Text style={styles.statusSendingText}>Sending…</Text>
-                  </View>
-                ) : message._status === 'failed' ? (
-                  <Pressable style={[styles.statusRow, mine && styles.statusRowMine]} onPress={() => handleRetry(message.id)}>
-                    <Ionicons name="alert-circle-outline" size={14} color="#EF4444" />
-                    <Text style={styles.statusFailedText}>Tap to retry</Text>
-                  </Pressable>
-                ) : null;
+                const commonProps = {
+                  mine,
+                  currentUserId,
+                  onLongPress: () => setLongPressTarget(message),
+                  onToggleReaction: (emoji: string) => handleToggleReaction(message.id, emoji),
+                  onRetry: () => handleRetry(message.id),
+                };
 
                 if (message.recalledAt) {
                   return (
@@ -983,177 +942,53 @@ export default function ChatRoomScreen() {
                   );
                 }
 
-                if (message.messageType === 'VOICE') {
-                  const isPlaying = playingId === message.id;
-                  const dur = message.durationSec ?? 0;
-                  const durLabel = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}`;
-                  return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
-                      <Pressable
-                        style={[styles.bubble, styles.voiceBubble, mine ? styles.bubbleMine : styles.bubbleOther]}
-                        onPress={!message._status ? () => handlePlayVoice(message.id, message.content) : undefined}
-                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
-                      >
-                        {message.replyTo && (
-                          <View style={styles.replyQuote}>
-                            <View style={styles.replyQuoteAccent} />
-                            <Text style={styles.replyQuoteText} numberOfLines={1}>{getReplyPreviewText(message.replyTo)}</Text>
-                          </View>
-                        )}
-                        <View style={styles.voiceRow}>
-                          <Ionicons
-                            name={isPlaying ? 'pause-circle' : 'play-circle'}
-                            size={32}
-                            color={mine ? colors.primary : colors.text}
-                          />
-                          <View style={styles.voiceInfo}>
-                            <View style={styles.voiceWave}>
-                              {Array.from({ length: 16 }).map((_, i) => (
-                                <View
-                                  key={i}
-                                  style={[
-                                    styles.voiceBar,
-                                    { height: 4 + (i % 4) * 4 },
-                                    isPlaying && styles.voiceBarActive,
-                                  ]}
-                                />
-                              ))}
-                            </View>
-                            <Text style={styles.voiceDuration}>{durLabel}</Text>
-                          </View>
-                        </View>
-                      </Pressable>
-                      {reactionsRow}
-                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
-                        {formatMessageTime(message.createdAt)}
-                        {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
-                      </Text>
-                      {statusIndicator}
-                    </View>
-                  );
+                switch (message.messageType) {
+                  case 'VOICE':
+                    return (
+                      <VoiceBubble
+                        key={message.id}
+                        message={message}
+                        isPlaying={playingId === message.id}
+                        onPlay={() => handlePlayVoice(message.id, message.content)}
+                        {...commonProps}
+                      />
+                    );
+                  case 'IMAGE':
+                    return (
+                      <ImageBubble
+                        key={message.id}
+                        message={message}
+                        onPress={() => setImageViewer(message.content)}
+                        {...commonProps}
+                      />
+                    );
+                  case 'GIF':
+                    return (
+                      <GifBubble
+                        key={message.id}
+                        message={message}
+                        onPress={() => setImageViewer(message.content)}
+                        {...commonProps}
+                      />
+                    );
+                  case 'VIDEO':
+                    return (
+                      <VideoBubble
+                        key={message.id}
+                        message={message}
+                        onPress={() => setVideoPlayer(message.content)}
+                        {...commonProps}
+                      />
+                    );
+                  default:
+                    return (
+                      <TextBubble
+                        key={message.id}
+                        message={message}
+                        {...commonProps}
+                      />
+                    );
                 }
-
-                if (message.messageType === 'IMAGE') {
-                  return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
-                      {message.replyTo && (
-                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.replyQuoteWrapper]}>
-                          <View style={styles.replyQuote}>
-                            <View style={styles.replyQuoteAccent} />
-                            <Text style={styles.replyQuoteText} numberOfLines={1}>{getReplyPreviewText(message.replyTo)}</Text>
-                          </View>
-                        </View>
-                      )}
-                      <Pressable
-                        onPress={!message._status ? () => setImageViewer(message.content) : undefined}
-                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
-                      >
-                        <Image
-                          source={{ uri: message.content }}
-                          style={styles.imageBubble}
-                          contentFit="cover"
-                        />
-                      </Pressable>
-                      {reactionsRow}
-                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
-                        {formatMessageTime(message.createdAt)}
-                        {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
-                      </Text>
-                      {statusIndicator}
-                    </View>
-                  );
-                }
-
-                if (message.messageType === 'GIF') {
-                  return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
-                      {message.replyTo && (
-                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.replyQuoteWrapper]}>
-                          <View style={styles.replyQuote}>
-                            <View style={styles.replyQuoteAccent} />
-                            <Text style={styles.replyQuoteText} numberOfLines={1}>{getReplyPreviewText(message.replyTo)}</Text>
-                          </View>
-                        </View>
-                      )}
-                      <Pressable
-                        style={styles.gifContainer}
-                        onPress={!message._status ? () => setImageViewer(message.content) : undefined}
-                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
-                      >
-                        <Image
-                          source={{ uri: message.content }}
-                          style={styles.gifBubble}
-                          contentFit="contain"
-                        />
-                        <View style={styles.gifBadge}>
-                          <Text style={styles.gifBadgeText}>GIF</Text>
-                        </View>
-                      </Pressable>
-                      {reactionsRow}
-                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
-                        {formatMessageTime(message.createdAt)}
-                        {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
-                      </Text>
-                      {statusIndicator}
-                    </View>
-                  );
-                }
-
-                if (message.messageType === 'VIDEO') {
-                  const dur = message.durationSec ?? 0;
-                  const durLabel = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, '0')}`;
-                  return (
-                    <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
-                      {message.replyTo && (
-                        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther, styles.replyQuoteWrapper]}>
-                          <View style={styles.replyQuote}>
-                            <View style={styles.replyQuoteAccent} />
-                            <Text style={styles.replyQuoteText} numberOfLines={1}>{getReplyPreviewText(message.replyTo)}</Text>
-                          </View>
-                        </View>
-                      )}
-                      <Pressable
-                        style={styles.videoBubble}
-                        onPress={!message._status ? () => setVideoPlayer(message.content) : undefined}
-                        onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
-                      >
-                        <View style={styles.videoOverlay}>
-                          <Ionicons name="play-circle" size={48} color="#FFFFFF" />
-                          {dur > 0 && <Text style={styles.videoDuration}>{durLabel}</Text>}
-                        </View>
-                      </Pressable>
-                      {reactionsRow}
-                      <Text style={[styles.messageTime, mine && styles.timeMine]}>
-                        {formatMessageTime(message.createdAt)}
-                        {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
-                      </Text>
-                      {statusIndicator}
-                    </View>
-                  );
-                }
-
-                return (
-                  <View key={message.id} style={[styles.messageBlock, mine && styles.messageMine, message._status === 'sending' && { opacity: 0.6 }]}>
-                    <Pressable
-                      style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}
-                      onLongPress={message._status !== 'sending' ? () => setLongPressTarget(message) : undefined}
-                    >
-                      {message.replyTo && (
-                        <View style={styles.replyQuote}>
-                          <View style={styles.replyQuoteAccent} />
-                          <Text style={styles.replyQuoteText} numberOfLines={2}>{getReplyPreviewText(message.replyTo)}</Text>
-                        </View>
-                      )}
-                      <Text style={styles.bubbleText}>{message.content}</Text>
-                    </Pressable>
-                    {reactionsRow}
-                    <Text style={[styles.messageTime, mine && styles.timeMine]}>
-                      {formatMessageTime(message.createdAt)}
-                      {mine ? `  ${message.isRead ? '✓✓' : '✓'}` : ''}
-                    </Text>
-                    {statusIndicator}
-                  </View>
-                );
               })
             ) : (
               <View style={styles.emptyState}>
