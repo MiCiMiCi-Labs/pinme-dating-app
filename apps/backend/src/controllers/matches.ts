@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
-import { getMatchIntimacy } from '../lib/intimacy';
+import { calculateChatIntimacy } from '../lib/intimacy';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -67,19 +67,58 @@ export async function getMatches(req: Request, res: Response) {
       orderBy: { createdAt: 'desc' },
     });
 
-    const result = await Promise.all(matches.map(async (match) => {
+    const matchIds = matches.map(match => match.id);
+
+    const [unreadCounts, intimacyMessages] = matchIds.length
+      ? await Promise.all([
+          prisma.message.groupBy({
+            by: ['matchId'],
+            where: {
+              matchId: { in: matchIds },
+              senderId: { not: dbUserId },
+              isRead: false,
+            },
+            _count: { _all: true },
+          }),
+          prisma.message.findMany({
+            where: {
+              matchId: { in: matchIds },
+            },
+            select: {
+              matchId: true,
+              senderId: true,
+              messageType: true,
+              recalledAt: true,
+              createdAt: true,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 2000,
+          }),
+        ])
+      : [[], []];
+
+    const unreadCountByMatchId = new Map(
+      unreadCounts.map(count => [count.matchId, count._count._all])
+    );
+
+    const intimacyMessagesByMatchId = new Map<string, typeof intimacyMessages>();
+    for (const message of intimacyMessages) {
+      const messagesForMatch = intimacyMessagesByMatchId.get(message.matchId) ?? [];
+      if (messagesForMatch.length < 200) {
+        messagesForMatch.push(message);
+        intimacyMessagesByMatchId.set(message.matchId, messagesForMatch);
+      }
+    }
+
+    const result = matches.map((match) => {
       const other = match.user1Id === dbUserId ? match.user2 : match.user1;
       const { birthday, ...otherFields } = other;
-      const [unreadCount, intimacy] = await Promise.all([
-        prisma.message.count({
-          where: {
-            matchId: match.id,
-            senderId: { not: dbUserId },
-            isRead: false,
-          },
-        }),
-        getMatchIntimacy(match.id, match.user1Id, match.user2Id),
-      ]);
+      const unreadCount = unreadCountByMatchId.get(match.id) ?? 0;
+      const intimacy = calculateChatIntimacy(
+        intimacyMessagesByMatchId.get(match.id) ?? [],
+        match.user1Id,
+        match.user2Id
+      );
 
       return {
         matchId: match.id,
@@ -89,7 +128,7 @@ export async function getMatches(req: Request, res: Response) {
         intimacy,
         user: { ...otherFields, age: calculateAge(birthday) },
       };
-    }));
+    });
 
     res.json(result);
   } catch {

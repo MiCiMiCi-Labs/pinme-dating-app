@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -72,6 +72,25 @@ function RootNavigator() {
   );
 }
 
+function AuthCacheBoundary() {
+  const { session } = useAuth();
+  const queryClient = useQueryClient();
+  const previousUserIdRef = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    const currentUserId = session?.user.id ?? null;
+    const previousUserId = previousUserIdRef.current;
+
+    if (previousUserId !== undefined && previousUserId !== currentUserId) {
+      queryClient.clear();
+    }
+
+    previousUserIdRef.current = currentUserId;
+  }, [queryClient, session?.user.id]);
+
+  return null;
+}
+
 function LoadingScreen() {
   const scale = useRef(new Animated.Value(1)).current;
 
@@ -110,6 +129,7 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
+        <AuthCacheBoundary />
         <RootNavigator />
       </AuthProvider>
     </QueryClientProvider>
