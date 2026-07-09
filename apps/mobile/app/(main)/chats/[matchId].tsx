@@ -20,9 +20,7 @@ import {
 } from 'react-native';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import {
-  getCurrentAppUser,
   getCallToken,
-  getMessages,
   markMessagesRead,
   recallMessage,
   sendGifMessage,
@@ -43,6 +41,9 @@ const VoiceCallModal = lazy(() =>
 import { supabase } from '@/lib/supabase';
 import Constants from 'expo-constants';
 import { STICKERS } from '@/lib/stickers';
+import { useAccessToken } from '@/queries/auth';
+import { useMessages } from '@/queries/chat.queries';
+import { useCurrentUser } from '@/queries/user.queries';
 
 const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 5000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
@@ -257,6 +258,9 @@ export default function ChatRoomScreen() {
   const [videoPlayer, setVideoPlayer] = useState<string | null>(null);
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
   const [callSession, setCallSession] = useState<{ url: string; token: string; roomName: string } | null>(null);
+  const accessToken = useAccessToken();
+  const { data: currentUserData, refetch: refetchCurrentUser } = useCurrentUser();
+  const { refetch: refetchMessages } = useMessages(matchId);
 
   const loadThread = useCallback(async (showLoading = true) => {
     if (!matchId) {
@@ -271,24 +275,27 @@ export default function ChatRoomScreen() {
     setError(current => (current === 'Realtime connection failed. Refreshing messages.' ? null : current));
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
+      if (!accessToken) return;
 
       let loadedMessages: ChatMessage[];
       let loadedIntimacy: ChatIntimacy;
 
       if (currentUserIdRef.current) {
-        const messagesResponse = await getMessages(session.access_token, matchId);
+        const messagesResponse = (await refetchMessages()).data;
+        if (!messagesResponse) throw new Error('Failed to load messages');
         loadedMessages = messagesResponse.messages;
         loadedIntimacy = messagesResponse.intimacy ?? DEFAULT_INTIMACY;
       } else {
-        const [{ user }, messagesResponse] = await Promise.all([
-          getCurrentAppUser(session.access_token),
-          getMessages(session.access_token, matchId),
+        const [userResult, messagesResult] = await Promise.all([
+          currentUserData ? Promise.resolve({ data: currentUserData }) : refetchCurrentUser(),
+          refetchMessages(),
         ]);
+        const userResponse = userResult.data;
+        const messagesResponse = messagesResult.data;
+        if (!userResponse || !messagesResponse) throw new Error('Failed to load messages');
 
-        currentUserIdRef.current = user.id;
-        setCurrentUserId(user.id);
+        currentUserIdRef.current = userResponse.user.id;
+        setCurrentUserId(userResponse.user.id);
         loadedMessages = messagesResponse.messages;
         loadedIntimacy = messagesResponse.intimacy ?? DEFAULT_INTIMACY;
       }
@@ -303,7 +310,7 @@ export default function ChatRoomScreen() {
           (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         );
       });
-      await markMessagesRead(session.access_token, matchId).catch(() => null);
+      await markMessagesRead(accessToken, matchId).catch(() => null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
     } finally {
@@ -312,7 +319,7 @@ export default function ChatRoomScreen() {
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
       }
     }
-  }, [matchId]);
+  }, [accessToken, currentUserData, matchId, refetchCurrentUser, refetchMessages]);
 
   useEffect(() => {
     loadThread();
