@@ -559,11 +559,21 @@ export type ChatMessage = {
   replyTo: ReplyPreview | null;
 };
 
+export type ChatIntimacy = {
+  level: 0 | 1 | 2 | 3 | 4;
+  label: 'New' | 'Warming up' | 'Steady' | 'Close' | 'Deep';
+  color: 'white' | 'yellow' | 'pink' | 'red' | 'purple';
+  score: number;
+  mutualDays: number;
+  currentStreakDays: number;
+};
+
 export type ChatMatch = {
   matchId: string;
   createdAt: string;
   lastMessage: ChatMessage | null;
   unreadCount: number;
+  intimacy: ChatIntimacy;
   user: {
     id: string;
     name: string;
@@ -595,7 +605,7 @@ export async function getMessages(accessToken: string, matchId: string, limit = 
   const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}?limit=${limit}`, {
     headers: authHeaders(accessToken),
   });
-  return parseResponse<{ messages: ChatMessage[] }>(response);
+  return parseResponse<{ messages: ChatMessage[]; intimacy: ChatIntimacy }>(response);
 }
 
 export async function getReplySuggestions(

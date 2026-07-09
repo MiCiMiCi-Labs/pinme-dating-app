@@ -8,6 +8,7 @@ export function ChatPreviewRow({
   time,
   unread,
   image,
+  intimacyColor,
   showDivider,
   onPress,
 }: {
@@ -16,6 +17,7 @@ export function ChatPreviewRow({
   time: string;
   unread: number;
   image: string;
+  intimacyColor?: string;
   showDivider?: boolean;
   onPress?: () => void;
 }) {
@@ -27,7 +29,10 @@ export function ChatPreviewRow({
         <Text style={styles.chatText}>{text}</Text>
       </View>
       <View style={styles.chatMeta}>
-        <Text style={styles.time}>{time}</Text>
+        <View style={styles.metaTop}>
+          {intimacyColor ? <Text style={[styles.heart, { color: intimacyColor }]}>♥</Text> : null}
+          <Text style={styles.time}>{time}</Text>
+        </View>
         {unread ? (
           <View style={styles.unread}>
             <Text style={styles.unreadText}>{unread}</Text>
@@ -62,6 +67,18 @@ const styles = StyleSheet.create({
   chatMeta: {
     alignItems: 'flex-end',
     gap: 8,
+  },
+  metaTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  heart: {
+    fontSize: 15,
+    fontWeight: '900',
+    textShadowColor: 'rgba(0,0,0,0.12)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1,
   },
   time: {
     color: colors.grayIcon,
