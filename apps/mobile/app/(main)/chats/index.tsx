@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { router } from 'expo-router';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -13,9 +13,9 @@ import {
 } from 'react-native';
 import { ChatPreviewRow } from '@/components/cards';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
-import { getChatMatches, type ChatMatch } from '@/lib/api';
+import { type ChatMatch } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { supabase } from '@/lib/supabase';
+import { useChatMatches } from '@/queries/chat.queries';
 
 function getPrimaryPhoto(match: ChatMatch) {
   const primary = match.user.photos.find(photo => photo.isPrimary) ?? match.user.photos[0];
@@ -62,41 +62,9 @@ function getPreview(match: ChatMatch) {
 }
 
 export default function ChatListScreen() {
-  const [matches, setMatches] = useState<ChatMatch[]>([]);
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const hasLoadedRef = useRef(false);
-
-  const loadMatches = useCallback(async (showSpinner = true) => {
-    if (showSpinner && !hasLoadedRef.current) setLoading(true);
-    setError(null);
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        setMatches([]);
-        return;
-      }
-
-      const data = await getChatMatches(session.access_token);
-      setMatches(data);
-      hasLoadedRef.current = true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load chats');
-    } finally {
-      hasLoadedRef.current = true;
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadMatches(!hasLoadedRef.current);
-    }, [loadMatches])
-  );
+  const { data: matches = [], isLoading, error, refetch } = useChatMatches();
 
   const filteredMatches = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
@@ -114,16 +82,17 @@ export default function ChatListScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => {
+            onRefresh={async () => {
               setRefreshing(true);
-              loadMatches(false);
+              await refetch();
+              setRefreshing(false);
             }}
           />
         }
       >
         <View style={styles.header}>
           <Text style={styles.title}>Messages</Text>
-          <IconButton icon="refresh-outline" onPress={() => loadMatches()} />
+          <IconButton icon="refresh-outline" onPress={() => refetch()} />
         </View>
 
         <View style={styles.search}>
@@ -154,13 +123,15 @@ export default function ChatListScreen() {
         )}
 
         <Text style={styles.sectionTitle}>Messages</Text>
-        {loading ? (
+        {isLoading ? (
           <View style={styles.centerState}>
             <ActivityIndicator color={colors.primary} />
           </View>
         ) : error ? (
           <View style={styles.centerState}>
-            <Text style={styles.errorText}>{error}</Text>
+            <Text style={styles.errorText}>
+              {error instanceof Error ? error.message : 'Failed to load chats'}
+            </Text>
           </View>
         ) : filteredMatches.length ? (
           <View style={styles.list}>

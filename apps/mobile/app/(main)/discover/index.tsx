@@ -1,10 +1,9 @@
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { router } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { DiscoverCard, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
-import { createSwipe, getCurrentAppUser, getDiscoveryFeed, getMyPhotos, type DiscoveryUser } from '@/lib/api';
-import { useAuth } from '@/contexts/auth';
+import { type DiscoveryUser } from '@/lib/api';
 import { cacheDiscoveryUsers } from '@/lib/discovery-cache';
 import {
   getDetailedProfileCompletion,
@@ -12,98 +11,60 @@ import {
 } from '@/lib/profileCompleteness';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
+import { useCurrentUser } from '@/queries/user.queries';
+import { useMyPhotos } from '@/queries/profile.queries';
+import { useCreateSwipe, useDiscoveryFeed } from '@/queries/discovery.queries';
 
 const SWIPE_THRESHOLD = 100;
 
 export default function SwipeScreen() {
-  const { session } = useAuth();
   const [users, setUsers] = useState<DiscoveryUser[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [matchedUser, setMatchedUser] = useState<DiscoveryUser | null>(null);
   const [matchedMatchId, setMatchedMatchId] = useState<string | null>(null);
-  const [myPhotoUrl, setMyPhotoUrl] = useState<string | null>(null);
-  const [profileCompletionPercent, setProfileCompletionPercent] = useState<number | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [feedKey, setFeedKey] = useState(0);
   const { height } = useWindowDimensions();
   const cardHeight = Math.min(height * 0.54, 440);
 
   const pan = useRef(new Animated.ValueXY()).current;
-  const hasLoadedRef = useRef(false);
   const swipingRef = useRef(false);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
+  const currentUserQuery = useCurrentUser();
+  const photosQuery = useMyPhotos();
+  const completion = useMemo(() => {
+    if (!currentUserQuery.data?.user || !photosQuery.data) return null;
+    return getDetailedProfileCompletion(currentUserQuery.data.user, photosQuery.data);
+  }, [currentUserQuery.data?.user, photosQuery.data]);
+  const canDiscover = Boolean(completion && completion.percent >= matchingProfileCompletionThreshold);
+  const feedQuery = useDiscoveryFeed(canDiscover);
+  const swipeMutation = useCreateSwipe();
+  const myPhotoUrl = useMemo(() => {
+    const photos = photosQuery.data ?? [];
+    const primary = photos.find(p => p.isPrimary) ?? photos[0];
+    return primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null;
+  }, [photosQuery.data]);
+  const loading = currentUserQuery.isLoading || photosQuery.isLoading || (canDiscover && feedQuery.isLoading);
+  const profileCompletionPercent = completion?.percent ?? null;
 
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
 
-  const loadFeed = useCallback(async (cancelled?: { current: boolean }, forceRefresh = false) => {
-    if (!session?.access_token) return;
-    if (hasLoadedRef.current && !forceRefresh) {
-      setLoading(false);
+  useEffect(() => {
+    if (!canDiscover) {
+      setUsers([]);
+      setCurrentIndex(0);
       return;
     }
 
-    if (!hasLoadedRef.current) setLoading(true);
-    try {
-      const [{ user: appUser }, myPhotos] = await Promise.all([
-        getCurrentAppUser(session.access_token),
-        getMyPhotos(session.access_token).catch(() => [] as Awaited<ReturnType<typeof getMyPhotos>>),
-      ]);
+    const feed = feedQuery.data?.users;
+    if (!feed) return;
 
-      const completion = getDetailedProfileCompletion(appUser, myPhotos);
-
-      if (!cancelled?.current) {
-        setProfileCompletionPercent(completion.percent);
-      }
-
-      if (completion.percent < matchingProfileCompletionThreshold) {
-        if (!cancelled?.current) {
-          setUsers([]);
-          setCurrentIndex(0);
-          const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-          setMyPhotoUrl(primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null);
-          hasLoadedRef.current = true;
-        }
-        return;
-      }
-
-      const { users: feed } = await getDiscoveryFeed(session.access_token);
-
-      if (!cancelled?.current) {
-        cacheDiscoveryUsers(feed);
-        setUsers(filterSwiped(feed));
-        setCurrentIndex(0);
-        pan.setValue({ x: 0, y: 0 });
-        const primary = myPhotos.find(p => p.isPrimary) ?? myPhotos[0];
-        setMyPhotoUrl(primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null);
-        hasLoadedRef.current = true;
-      }
-    } catch (_) {
-      // keep existing state on error
-    } finally {
-      if (!cancelled?.current) {
-        hasLoadedRef.current = true;
-        setLoading(false);
-      }
-    }
-  }, [pan]);
-
-  useFocusEffect(
-    useCallback(() => {
-      setUsers(prev => filterSwiped(prev));
-      const cancelled = { current: false };
-      loadFeed(cancelled);
-      return () => { cancelled.current = true; };
-    }, [loadFeed])
-  );
-
-  useEffect(() => {
-    if (feedKey === 0) return;
-    hasLoadedRef.current = false;
-    loadFeed(undefined, true);
-  }, [feedKey, loadFeed]);
+    cacheDiscoveryUsers(feed);
+    setUsers(filterSwiped(feed));
+    setCurrentIndex(0);
+    pan.setValue({ x: 0, y: 0 });
+  }, [canDiscover, feedQuery.data?.users, pan]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -113,14 +74,12 @@ export default function SwipeScreen() {
 
     if (!user) return;
     markSwiped(user.id);
-    if (!session?.access_token) return;
 
     try {
-      const { match } = await createSwipe(
-        session.access_token,
-        user.id,
-        direction === 'like' ? 'LIKE' : 'DISLIKE',
-      );
+      const { match } = await swipeMutation.mutateAsync({
+        targetId: user.id,
+        action: direction === 'like' ? 'LIKE' : 'DISLIKE',
+      });
       if (match) {
         setMatchedUser(user);
         setMatchedMatchId(match.id);
@@ -128,7 +87,7 @@ export default function SwipeScreen() {
     } catch (_) {
       // non-blocking — card already advanced
     }
-  }, [pan, session?.access_token]);
+  }, [pan, swipeMutation]);
 
   handleSwipeRef.current = handleSwipe;
 
@@ -232,7 +191,9 @@ export default function SwipeScreen() {
       {filterOpen ? (
         <FilterSheet
           onClose={() => setFilterOpen(false)}
-          onApply={() => setFeedKey(k => k + 1)}
+          onApply={() => {
+            feedQuery.refetch();
+          }}
         />
       ) : null}
 
