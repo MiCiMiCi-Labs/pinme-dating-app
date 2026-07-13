@@ -37,6 +37,8 @@ import {
 } from '@/lib/api';
 import { createPhotoThumbnail } from '@/lib/photos';
 import { searchCities, type CitySuggestion } from '@/lib/places';
+import { setProfileCompletion } from '@/stores/profileCompletion.store';
+import { showToast } from '@/stores/toast.store';
 
 type StepId = 'basics' | 'interested' | 'goal' | 'photos' | 'city' | 'bio';
 type LocationConsent = 'allowed' | 'denied' | null;
@@ -479,6 +481,13 @@ export default function CompleteProfileScreen() {
         return;
       }
 
+      setProfileCompletion({
+        percent: 100,
+        completed: 1,
+        total: 1,
+        missingFields: [],
+      });
+      showToast('Profile completed', 'success');
       router.replace('/(main)/discover');
     } catch (profileError) {
       setError(

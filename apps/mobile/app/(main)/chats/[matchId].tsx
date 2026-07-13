@@ -41,7 +41,8 @@ const VoiceCallModal = lazy(() =>
 import { supabase } from '@/lib/supabase';
 import Constants from 'expo-constants';
 import { STICKERS } from '@/lib/stickers';
-import { useAccessToken } from '@/queries/auth';
+import { readCachedThread, writeCachedThread } from '@/lib/chatMessageCache';
+import { useAccessToken, useAuthUserId } from '@/queries/auth';
 import { useMessages } from '@/queries/chat.queries';
 import { useCurrentUser } from '@/queries/user.queries';
 import { GifBubble } from '@/components/chat/GifBubble';
@@ -50,8 +51,15 @@ import { TextBubble } from '@/components/chat/TextBubble';
 import { VideoBubble } from '@/components/chat/VideoBubble';
 import { VoiceBubble } from '@/components/chat/VoiceBubble';
 import { formatMessageTime, getReplyPreviewText } from '@/components/chat/chatUtils';
+import {
+  clearPendingMessage,
+  clearUnreadCount,
+  registerIncomingMessage,
+  setActiveMatch,
+  setPendingMessage,
+} from '@/stores/chatEvents.store';
 
-const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 5000;
+const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 15000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
 const RECALL_WINDOW_MS = 2 * 60 * 1000;
 const REACTION_EMOJIS = ['❤️', '😂', '😮', '👍', '👎'] as const;
@@ -237,6 +245,7 @@ export default function ChatRoomScreen() {
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
   const [callSession, setCallSession] = useState<{ url: string; token: string; roomName: string } | null>(null);
   const accessToken = useAccessToken();
+  const authUserId = useAuthUserId();
   const { data: currentUserData, refetch: refetchCurrentUser } = useCurrentUser();
   const { refetch: refetchMessages } = useMessages(matchId);
 
@@ -247,7 +256,7 @@ export default function ChatRoomScreen() {
       return;
     }
 
-    if (showLoading) {
+    if (showLoading && messagesRef.current.length === 0) {
       setLoading(true);
     }
     setError(current => (current === 'Realtime connection failed. Refreshing messages.' ? null : current));
@@ -288,6 +297,9 @@ export default function ChatRoomScreen() {
           (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         );
       });
+      if (authUserId) {
+        writeCachedThread(authUserId, matchId, loadedMessages, loadedIntimacy);
+      }
       await markMessagesRead(accessToken, matchId).catch(() => null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -297,11 +309,43 @@ export default function ChatRoomScreen() {
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
       }
     }
-  }, [accessToken, currentUserData, matchId, refetchCurrentUser, refetchMessages]);
+  }, [accessToken, authUserId, currentUserData, matchId, refetchCurrentUser, refetchMessages]);
 
   useEffect(() => {
     loadThread();
   }, [loadThread]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCachedThread() {
+      if (!authUserId || !matchId || messagesRef.current.length > 0) return;
+
+      const cached = await readCachedThread(authUserId, matchId);
+      if (!cached || cancelled) return;
+
+      setMessages(cached.messages);
+      if (cached.intimacy) setIntimacy(cached.intimacy);
+      setLoading(false);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+    }
+
+    loadCachedThread();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId, matchId]);
+
+  useEffect(() => {
+    if (!matchId) return;
+    setActiveMatch(matchId);
+    clearUnreadCount(matchId);
+
+    return () => {
+      setActiveMatch(null);
+    };
+  }, [matchId]);
 
   useEffect(() => {
     currentUserIdRef.current = currentUserId;
@@ -310,6 +354,11 @@ export default function ChatRoomScreen() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    if (!authUserId || !matchId || !messages.length) return;
+    writeCachedThread(authUserId, matchId, messages, intimacy);
+  }, [authUserId, intimacy, matchId, messages]);
 
   useEffect(() => {
     if (!matchId) return;
@@ -353,6 +402,12 @@ export default function ChatRoomScreen() {
           (payload) => {
             const row = payload.new as RealtimeMessageRow;
             logRealtimeStatus(activeMatchId, `INSERT ${row.id}`);
+            registerIncomingMessage({
+              matchId: activeMatchId,
+              messageId: row.id,
+              senderId: row.sender_id,
+              createdAt: row.created_at,
+            });
             setMessages(current => mergeMessage(current, mapRealtimeMessage(row, current)));
             requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
@@ -394,7 +449,7 @@ export default function ChatRoomScreen() {
 
           if (status === 'SUBSCRIBED') {
             setError(null);
-            loadThread(false);
+            stopSafetySync();
           }
 
           if (REALTIME_FALLBACK_STATUSES.has(status)) {
@@ -409,7 +464,6 @@ export default function ChatRoomScreen() {
       appStateRef.current = nextAppState;
 
       if (nextAppState === 'active') {
-        ensureSafetySync();
         if (wasBackground) {
           loadThread(false);
         }
@@ -418,7 +472,6 @@ export default function ChatRoomScreen() {
       }
     });
 
-    ensureSafetySync();
     startRealtime();
 
     return () => {
@@ -465,6 +518,7 @@ export default function ChatRoomScreen() {
     setDraft('');
     setReplyTo(null);
     setSending(true);
+    setPendingMessage(tempId, 'sending');
     setMessages(current => mergeMessage(current, optimisticMessage));
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
@@ -473,9 +527,11 @@ export default function ChatRoomScreen() {
       if (!session?.access_token) throw new Error('Please log in again.');
       const { message } = await sendMessage(session.access_token, matchId, content, pendingReplyTo?.id);
       retryPayloads.current.delete(tempId);
+      clearPendingMessage(tempId);
       setMessages(current => mergeMessage(current.filter(item => item.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch {
+      setPendingMessage(tempId, 'failed');
       setMessages(current => current.map(m =>
         m.id === tempId ? { ...m, _status: 'failed' as const } : m
       ));

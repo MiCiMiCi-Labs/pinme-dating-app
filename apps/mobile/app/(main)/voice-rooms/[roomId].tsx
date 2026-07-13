@@ -31,6 +31,13 @@ import {
 } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
+import {
+  markVoiceRoomNeedsRefresh,
+  resetVoiceRoomState,
+  setActiveVoiceRoom,
+  setMicEnabled,
+  setVoiceRoomMutedUsers,
+} from '@/stores/voiceRoom.store';
 
 registerGlobals();
 
@@ -67,6 +74,7 @@ export default function VoiceRoomScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    setActiveVoiceRoom(roomId ?? null);
 
     async function join() {
       if (!roomId) {
@@ -100,8 +108,18 @@ export default function VoiceRoomScreen() {
 
     return () => {
       cancelled = true;
+      resetVoiceRoomState();
     };
   }, [roomId]);
+
+  useEffect(() => {
+    if (!room) return;
+    setVoiceRoomMutedUsers(
+      room.participants
+        .filter(participant => participant.isMutedByHost)
+        .map(participant => participant.userId)
+    );
+  }, [room]);
 
   useEffect(() => {
     if (!roomId || !accessTokenRef.current) return;
@@ -161,6 +179,7 @@ export default function VoiceRoomScreen() {
         !participant.isMutedByHost
       );
       setRoom(updatedRoom);
+      markVoiceRoomNeedsRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update participant');
     }
@@ -254,9 +273,15 @@ function VoiceRoomStage({
     }
   }, [isMicrophoneEnabled, localParticipant, mutedByHost]);
 
+  useEffect(() => {
+    setMicEnabled(Boolean(isMicrophoneEnabled && !mutedByHost));
+  }, [isMicrophoneEnabled, mutedByHost]);
+
   const toggleMic = async () => {
     if (mutedByHost) return;
-    await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
+    const nextEnabled = !isMicrophoneEnabled;
+    setMicEnabled(nextEnabled);
+    await localParticipant.setMicrophoneEnabled(nextEnabled);
   };
 
   const leave = async () => {

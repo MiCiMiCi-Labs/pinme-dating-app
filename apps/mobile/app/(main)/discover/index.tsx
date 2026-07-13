@@ -15,6 +15,14 @@ import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 import { useCurrentUser } from '@/queries/user.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
 import { useCreateSwipe, useDiscoveryFeed } from '@/queries/discovery.queries';
+import {
+  setDiscoveryCurrentIndex,
+  setDiscoveryFilterOpen,
+  setDiscoveryLastSwipeAction,
+  setDiscoverySwipeLocked,
+} from '@/stores/discoveryUi.store';
+import { registerMatchSuccess } from '@/stores/matchEvents.store';
+import { setProfileCompletion } from '@/stores/profileCompletion.store';
 
 const SWIPE_THRESHOLD = 100;
 
@@ -53,6 +61,19 @@ export default function SwipeScreen() {
   currentUserRef.current = currentUser;
 
   useEffect(() => {
+    setDiscoveryCurrentIndex(currentIndex);
+  }, [currentIndex]);
+
+  useEffect(() => {
+    setDiscoveryFilterOpen(filterOpen);
+  }, [filterOpen]);
+
+  useEffect(() => {
+    if (!completion) return;
+    setProfileCompletion(completion);
+  }, [completion]);
+
+  useEffect(() => {
     if (!canDiscover) {
       setUsers([]);
       setCurrentIndex(0);
@@ -79,6 +100,8 @@ export default function SwipeScreen() {
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
     swipingRef.current = false;
+    setDiscoverySwipeLocked(false);
+    setDiscoveryLastSwipeAction(direction);
     pan.setValue({ x: 0, y: 0 });
     setCurrentIndex(prev => prev + 1);
 
@@ -91,6 +114,13 @@ export default function SwipeScreen() {
         action: direction === 'like' ? 'LIKE' : 'DISLIKE',
       });
       if (match) {
+        const primaryPhoto = user.photos.find(photo => photo.isPrimary) ?? user.photos[0];
+        registerMatchSuccess({
+          matchId: match.id,
+          userId: user.id,
+          userName: user.name,
+          photoUrl: primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : undefined,
+        });
         setMatchedUser(user);
         setMatchedMatchId(match.id);
       }
@@ -104,6 +134,7 @@ export default function SwipeScreen() {
   const animateSwipe = useCallback((direction: 'like' | 'nope') => {
     if (swipingRef.current || !currentUserRef.current) return;
     swipingRef.current = true;
+    setDiscoverySwipeLocked(true);
     const toX = direction === 'like' ? 500 : -500;
     Animated.timing(pan, {
       toValue: { x: toX, y: 0 },
@@ -133,10 +164,12 @@ export default function SwipeScreen() {
         }
         if (!swipingRef.current && (gesture.dx > SWIPE_THRESHOLD || gesture.vx > 0.8)) {
           swipingRef.current = true;
+          setDiscoverySwipeLocked(true);
           Animated.timing(pan, { toValue: { x: 500, y: gesture.dy }, duration: 280, useNativeDriver: false })
             .start(() => handleSwipeRef.current('like'));
         } else if (!swipingRef.current && (gesture.dx < -SWIPE_THRESHOLD || gesture.vx < -0.8)) {
           swipingRef.current = true;
+          setDiscoverySwipeLocked(true);
           Animated.timing(pan, { toValue: { x: -500, y: gesture.dy }, duration: 280, useNativeDriver: false })
             .start(() => handleSwipeRef.current('nope'));
         } else {

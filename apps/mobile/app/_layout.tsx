@@ -4,8 +4,13 @@ import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { GlobalToastHost } from '@/components/global-toast';
 import { AuthProvider, useAuth } from '@/contexts/auth';
 import { colors } from '@/design/system';
+import { resetChatEvents } from '@/stores/chatEvents.store';
+import { resetDiscoveryUi } from '@/stores/discoveryUi.store';
+import { resetProfileCompletion } from '@/stores/profileCompletion.store';
+import { resetVoiceRoomState } from '@/stores/voiceRoom.store';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -83,6 +88,10 @@ function AuthCacheBoundary() {
 
     if (previousUserId !== undefined && previousUserId !== currentUserId) {
       queryClient.clear();
+      resetChatEvents();
+      resetDiscoveryUi();
+      resetProfileCompletion();
+      resetVoiceRoomState();
     }
 
     previousUserIdRef.current = currentUserId;
@@ -131,6 +140,7 @@ export default function RootLayout() {
       <AuthProvider>
         <AuthCacheBoundary />
         <RootNavigator />
+        <GlobalToastHost />
       </AuthProvider>
     </QueryClientProvider>
   );
