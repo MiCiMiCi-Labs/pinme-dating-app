@@ -49,7 +49,21 @@ export async function createSwipe(req: Request, res: Response) {
       where: { swiperId_targetId: { swiperId, targetId } },
     });
     if (existing) {
-      res.status(409).json({ error: 'Already swiped on this user' });
+      const [user1Id, user2Id] = swiperId < targetId
+        ? [swiperId, targetId]
+        : [targetId, swiperId];
+      const match = await prisma.match.findUnique({
+        where: { user1Id_user2Id: { user1Id, user2Id } },
+      });
+      const message = match
+        ? await prisma.message.findFirst({
+            where: { matchId: match.id },
+            orderBy: { createdAt: 'desc' },
+            include: { sender: { select: { id: true, name: true } } },
+          })
+        : null;
+
+      res.status(200).json({ swipe: existing, match, message });
       return;
     }
 
@@ -58,6 +72,7 @@ export async function createSwipe(req: Request, res: Response) {
     });
 
     let match = null;
+    let message = null;
     if (action === 'LIKE' || action === 'SUPER_LIKE') {
       const reverseSwipe = await prisma.swipe.findUnique({
         where: { swiperId_targetId: { swiperId: targetId, targetId: swiperId } },
@@ -75,7 +90,7 @@ export async function createSwipe(req: Request, res: Response) {
           data: { user1Id, user2Id },
         });
 
-        await prisma.message.create({
+        message = await prisma.message.create({
           data: {
             matchId: match.id,
             senderId: null,
@@ -83,11 +98,12 @@ export async function createSwipe(req: Request, res: Response) {
             messageType: 'SYSTEM',
             isRead: true,
           },
+          include: { sender: { select: { id: true, name: true } } },
         });
       }
     }
 
-    res.status(201).json({ swipe, match });
+    res.status(201).json({ swipe, match, message });
   } catch (err) {
     console.error('[createSwipe] error:', err);
     res.status(500).json({ error: 'Internal server error' });

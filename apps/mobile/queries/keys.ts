@@ -5,4 +5,7 @@ export const queryKeys = {
   chatMatches: (userId: string) => ['chat', userId, 'matches'] as const,
   messages: (userId: string, matchId: string) => ['chat', userId, 'messages', matchId] as const,
   discoveryFeed: (userId: string) => ['discovery', userId, 'feed'] as const,
+  likesPreview: (userId: string) => ['likes', userId, 'preview'] as const,
+  likesList: (userId: string) => ['likes', userId, 'list'] as const,
+  subscription: (userId: string) => ['subscription', userId, 'me'] as const,
 };

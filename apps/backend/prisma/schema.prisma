@@ -37,6 +37,7 @@ model User {
   swipesReceived            Swipe[]                 @relation("TargetSwipes")
   ownedVoiceRooms           VoiceRoom[]             @relation("VoiceRoomOwner")
   voiceRoomParticipations   VoiceRoomParticipant[]
+  subscription              Subscription?
 
   @@map("users")
 }
@@ -258,6 +259,21 @@ model VoiceRoomParticipant {
   @@map("voice_room_participants")
 }
 
+model Subscription {
+  id        String             @id @default(uuid())
+  userId    String             @unique @map("user_id")
+  status    SubscriptionStatus @default(ACTIVE)
+  plan      String             @default("premium")
+  source    String             @default("promo")
+  promoCode String?            @map("promo_code")
+  expiresAt DateTime?          @map("expires_at")
+  createdAt DateTime           @default(now()) @map("created_at")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
 enum Gender {
   MALE
   FEMALE
@@ -296,4 +312,10 @@ enum ReportStatus {
   REVIEWED
   RESOLVED
   DISMISSED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELED
 }
