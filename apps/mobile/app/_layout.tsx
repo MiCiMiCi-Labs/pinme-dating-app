@@ -3,16 +3,21 @@ import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/reac
 import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, LogBox, StyleSheet, Text, View } from 'react-native';
 import { GlobalToastHost } from '@/components/global-toast';
 import { AuthProvider, useAuth } from '@/contexts/auth';
 import { colors } from '@/design/system';
 import { resetChatEvents } from '@/stores/chatEvents.store';
 import { resetDiscoveryUi } from '@/stores/discoveryUi.store';
+import { resetHiddenLikedUsers } from '@/stores/likedYou.store';
 import { resetProfileCompletion } from '@/stores/profileCompletion.store';
 import { resetVoiceRoomState } from '@/stores/voiceRoom.store';
 
 SplashScreen.preventAutoHideAsync();
+
+if (__DEV__) {
+  LogBox.ignoreLogs(['Sending `onAnimatedValueUpdate` with no listeners registered.']);
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -90,6 +95,7 @@ function AuthCacheBoundary() {
       queryClient.clear();
       resetChatEvents();
       resetDiscoveryUi();
+      resetHiddenLikedUsers();
       resetProfileCompletion();
       resetVoiceRoomState();
     }

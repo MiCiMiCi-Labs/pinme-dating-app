@@ -182,6 +182,29 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return data as T;
 }
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 12_000
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timed out. Please try again.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function authHeaders(accessToken: string) {
   return {
     Authorization: `Bearer ${accessToken}`,
@@ -515,12 +538,16 @@ export async function getUserById(accessToken: string, userId: string) {
 export type SwipeAction = 'LIKE' | 'DISLIKE' | 'SUPER_LIKE';
 
 export async function createSwipe(accessToken: string, targetId: string, action: SwipeAction) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/swipes`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/swipes`, {
     method: 'POST',
     headers: { ...authHeaders(accessToken), 'Content-Type': 'application/json' },
     body: JSON.stringify({ targetId, action }),
   });
-  return parseResponse<{ swipe: unknown; match: { id: string } | null }>(response);
+  return parseResponse<{
+    swipe: unknown;
+    match: { id: string; createdAt?: string } | null;
+    message?: ChatMessage | null;
+  }>(response);
 }
 
 // ─── Chat ────────────────────────────────────────────────────────────────────
@@ -585,6 +612,57 @@ export type ChatMatch = {
     photos: Photo[];
   };
 };
+
+export type LikesPreview = {
+  count: number;
+  preview: Array<{
+    userId: string;
+    photoUrl: string;
+    thumbnailUrl: string;
+  }>;
+};
+
+export type Subscription = {
+  status: 'ACTIVE' | 'EXPIRED' | 'CANCELED';
+  plan: string | null;
+  source: string | null;
+  promoCode: string | null;
+  expiresAt: string | null;
+  isActive: boolean;
+};
+
+export async function getLikesPreview(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/likes/me/preview`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<LikesPreview>(response);
+}
+
+export async function getLikesList(accessToken: string) {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/v1/likes/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ likedBy: PublicUser[] }>(response);
+}
+
+export async function getMySubscription(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/subscription/me`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ subscription: Subscription }>(response);
+}
+
+export async function redeemPromoCode(accessToken: string, code: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/subscription/redeem-code`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ code }),
+  });
+  return parseResponse<{ message: string; subscription: Subscription }>(response);
+}
 
 export async function getCallToken(accessToken: string, matchId: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/calls/${matchId}/token`, {
