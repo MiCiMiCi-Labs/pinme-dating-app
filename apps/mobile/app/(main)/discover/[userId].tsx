@@ -1,6 +1,15 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
 import { colors } from '@/design/system';
 import { createSwipe, getUserById, type PublicUser } from '@/lib/api';
@@ -10,7 +19,7 @@ import { getDisplayPhotoUrl } from '@/lib/photos';
 import { markSwiped } from '@/lib/swipedUsers';
 
 export default function ProfileDetailScreen() {
-  const { userId } = useLocalSearchParams<{ userId: string }>();
+  const { userId, matchId } = useLocalSearchParams<{ userId: string; matchId?: string }>();
   const { session } = useAuth();
   const [user, setUser] = useState<PublicUser | null>(() => getCachedDiscoveryUser(userId));
   const [loading, setLoading] = useState(!getCachedDiscoveryUser(userId));
@@ -96,6 +105,16 @@ export default function ProfileDetailScreen() {
     });
   };
 
+  const handleChat = () => {
+    if (!user || !matchId) return;
+    const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+    const primaryPhotoUrl = primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '';
+    router.push({
+      pathname: '/(main)/chats/[matchId]',
+      params: { matchId, name: user.name, photoUrl: primaryPhotoUrl },
+    });
+  };
+
   const handleDislike = () => {
     if (!user) return;
     markSwiped(user.id);
@@ -159,7 +178,13 @@ export default function ProfileDetailScreen() {
             </Animated.View>
           )}
         </View>
-        <ProfileDetailContent user={user} onLike={handleLike} onDislike={handleDislike} liked={liked} />
+        <ProfileDetailContent
+          user={user}
+          onLike={handleLike}
+          onDislike={handleDislike}
+          onChat={matchId ? handleChat : undefined}
+          liked={liked}
+        />
       </ScrollView>
     </SafeAreaView>
   );
