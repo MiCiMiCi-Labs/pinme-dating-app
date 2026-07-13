@@ -1,20 +1,28 @@
 import { Image } from 'expo-image';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
+import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { colors, IconButton } from '@/design/system';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useChatMatches } from '@/queries/chat.queries';
+import { $matchEvents, markMatchRefreshHandled } from '@/stores/matchEvents.store';
+import { showToast } from '@/stores/toast.store';
 
 export default function MatchesScreen() {
+  const [refreshing, setRefreshing] = useState(false);
   const { data, isLoading, refetch } = useChatMatches();
   const matches = Array.isArray(data) ? data : [];
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    const unsubscribe = $matchEvents.subscribe((events) => {
+      if (!events.pendingMatchRefresh || !events.latestMatch) return;
+      showToast(`You matched with ${events.latestMatch.userName}`, 'success');
       refetch();
-    }, [refetch])
-  );
+      markMatchRefreshHandled();
+    });
+
+    return unsubscribe;
+  }, [refetch]);
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -27,6 +35,12 @@ export default function MatchesScreen() {
         keyExtractor={({ matchId }) => matchId}
         numColumns={2}
         showsVerticalScrollIndicator={false}
+        refreshing={refreshing}
+        onRefresh={async () => {
+          setRefreshing(true);
+          await refetch();
+          setRefreshing(false);
+        }}
         contentContainerStyle={styles.content}
         columnWrapperStyle={styles.row}
         ItemSeparatorComponent={() => <View style={styles.rowGap} />}

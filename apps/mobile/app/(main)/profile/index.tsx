@@ -14,6 +14,8 @@ import { ProfileStrengthCard } from '@/components/profile/ProfileStrengthCard';
 import { PhotoSummary } from '@/components/profile/PhotoSummary';
 import { ProfileSections } from '@/components/profile/ProfileSections';
 import { ProfileActions } from '@/components/profile/ProfileActions';
+import { setProfileCompletion } from '@/stores/profileCompletion.store';
+import { showToast } from '@/stores/toast.store';
 
 function nullable(value: string) {
   const trimmed = value.trim();
@@ -72,6 +74,10 @@ export default function MyProfileScreen() {
     () => getDetailedProfileCompletion(user, photos),
     [user, photos],
   );
+
+  useEffect(() => {
+    setProfileCompletion(completion);
+  }, [completion]);
 
   const set = (key: keyof ProfileDraft) => (value: string) => {
     setDraft(current => ({ ...current, [key]: value }));
@@ -180,9 +186,9 @@ export default function MyProfileScreen() {
       const nextUser: AppUser = { ...result.user, profile: result.profile };
       setUser(nextUser);
       setDraft(draftFromUser(nextUser));
-      Alert.alert('Saved', 'Your profile has been updated.');
+      showToast('Profile saved', 'success');
     } catch (error) {
-      Alert.alert('Save failed', error instanceof Error ? error.message : 'Failed to save profile.');
+      showToast(error instanceof Error ? error.message : 'Failed to save profile.', 'error');
     } finally {
       setSaving(false);
     }

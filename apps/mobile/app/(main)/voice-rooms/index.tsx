@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -22,6 +22,7 @@ import {
 } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
+import { $voiceRoom, markVoiceRoomRefreshHandled } from '@/stores/voiceRoom.store';
 
 function getOwnerPhoto(room: VoiceRoom) {
   const primary = room.owner.photos.find(photo => photo.isPrimary) ?? room.owner.photos[0];
@@ -73,6 +74,16 @@ export default function VoiceRoomsScreen() {
       loadRooms(!hasLoadedRef.current);
     }, [loadRooms])
   );
+
+  useEffect(() => {
+    const unsubscribe = $voiceRoom.subscribe((voiceRoom) => {
+      if (!voiceRoom.voiceRoomNeedsRefresh) return;
+      loadRooms(false);
+      markVoiceRoomRefreshHandled();
+    });
+
+    return unsubscribe;
+  }, [loadRooms]);
 
   const canCreate = roomName.trim().length >= 2 && selectedTags.length > 0;
 

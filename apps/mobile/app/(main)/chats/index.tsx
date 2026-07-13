@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -17,6 +17,7 @@ import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import { type ChatMatch } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useChatMatches } from '@/queries/chat.queries';
+import { $chatEvents, markChatRefreshHandled, setUnreadCounts } from '@/stores/chatEvents.store';
 
 function getPrimaryPhoto(match: ChatMatch) {
   const primary = match.user.photos.find(photo => photo.isPrimary) ?? match.user.photos[0];
@@ -67,6 +68,23 @@ export default function ChatListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const { data, isLoading, error, refetch } = useChatMatches();
   const matches = Array.isArray(data) ? data : [];
+
+  useEffect(() => {
+    setUnreadCounts(
+      Object.fromEntries(matches.map(match => [match.matchId, match.unreadCount]))
+    );
+  }, [matches]);
+
+  useEffect(() => {
+    const unsubscribe = $chatEvents.subscribe((events) => {
+      const matchIds = Object.keys(events.chatNeedsRefreshByMatchId);
+      if (!matchIds.length) return;
+      refetch();
+      matchIds.forEach(markChatRefreshHandled);
+    });
+
+    return unsubscribe;
+  }, [refetch]);
 
   const filteredMatches = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
