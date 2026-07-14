@@ -80,7 +80,21 @@ function Badge({ emoji, label }: { emoji: string; label: string }) {
   );
 }
 
-export function ProfileDetailContent({ user, onLike, onDislike, onChat, liked }: { user: PublicUser | null; onLike?: () => void; onDislike?: () => void; onChat?: () => void; liked?: boolean }) {
+export function ProfileDetailContent({
+  user,
+  onLike,
+  onDislike,
+  onMessage,
+  liked,
+  variant = 'discovery',
+}: {
+  user: PublicUser | null;
+  onLike?: () => void;
+  onDislike?: () => void;
+  onMessage?: () => void;
+  liked?: boolean;
+  variant?: 'discovery' | 'matched';
+}) {
   const profile = user?.profile;
 
   const badges = [
@@ -222,19 +236,26 @@ export function ProfileDetailContent({ user, onLike, onDislike, onChat, liked }:
         ) : null}
       </View>
 
-      <View style={styles.actionRow}>
-        <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>
-          <Ionicons name="close" size={28} color={colors.orange} />
-        </Pressable>
-        {onChat ? (
-          <Pressable style={styles.bigAction} onPress={onChat}>
+      {variant === 'matched' ? (
+        <View style={styles.matchedAction}>
+          <Pressable style={styles.messageButton} onPress={onMessage}>
+            <Ionicons name="chatbubble-ellipses" size={22} color="#FFFFFF" />
+            <Text style={styles.messageButtonText}>Message</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.actionRow}>
+          <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>
+            <Ionicons name="close" size={28} color={colors.orange} />
+          </Pressable>
+          <Pressable style={styles.bigAction} onPress={onMessage}>
             <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
           </Pressable>
-        ) : null}
-        <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
-          <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
-        </Pressable>
-      </View>
+          <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
+            <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
+          </Pressable>
+        </View>
+      )}
     </>
   );
 }
@@ -326,6 +347,25 @@ const styles = StyleSheet.create({
     shadowColor: colors.primary,
     shadowOpacity: 0.25,
     shadowRadius: 18,
+  },
+  matchedAction: {
+    paddingHorizontal: 28,
+    paddingTop: 18,
+    paddingBottom: 48,
+  },
+  messageButton: {
+    height: 58,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  messageButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '900',
   },
   info: { paddingHorizontal: 28, paddingTop: 28 },
   name: { color: colors.text, fontSize: 25, fontWeight: '900' },

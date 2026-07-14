@@ -2,25 +2,28 @@ import { Ionicons } from '@expo/vector-icons';
 import { useStore } from '@nanostores/react';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
+  Animated,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { MatchOverlay } from '@/components/discover';
+import { DiscoverCard, MatchOverlay } from '@/components/discover';
 import { colors, IconButton } from '@/design/system';
-import { type DiscoveryUser, type PublicUser } from '@/lib/api';
+import { createSwipe, type DiscoveryUser, type PublicUser } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
-import { $hiddenLikedUserIds } from '@/stores/likedYou.store';
+import { useAccessToken } from '@/queries/auth';
+import { $hiddenLikedUserIds, hideLikedUser } from '@/stores/likedYou.store';
 import { showToast } from '@/stores/toast.store';
+
+const SWIPE_THRESHOLD = 100;
 
 function toDiscoveryUser(user: PublicUser): DiscoveryUser {
   return {
@@ -30,20 +33,127 @@ function toDiscoveryUser(user: PublicUser): DiscoveryUser {
 }
 
 export default function LikesYouScreen() {
+  const [users, setUsers] = useState<PublicUser[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [matchedUser, setMatchedUser] = useState<PublicUser | null>(null);
   const [matchedMatchId, setMatchedMatchId] = useState<string | null>(null);
-  const { width } = useWindowDimensions();
+  const { height } = useWindowDimensions();
   const { data, isLoading, error, refetch, isRefetching } = useLikesList();
   const photosQuery = useMyPhotos();
   const matchMutation = useMatchFromLikesList();
+  const accessToken = useAccessToken();
   const hiddenLikedUserIds = useStore($hiddenLikedUserIds);
   const likedBy = (data?.likedBy ?? []).filter(user => !hiddenLikedUserIds.has(user.id));
-  const cardWidth = (width - 24 * 2 - 14) / 2;
+  const cardHeight = Math.min(height * 0.54, 440);
+  const pan = useRef(new Animated.ValueXY()).current;
+  const swipingRef = useRef(false);
+  const currentUserRef = useRef<PublicUser | null>(null);
+  const handleDecisionRef = useRef<(direction: 'like' | 'nope') => void>(() => {});
+  const currentUser = users[currentIndex] ?? null;
+  const currentDiscoveryUser = currentUser ? toDiscoveryUser(currentUser) : null;
+  currentUserRef.current = currentUser;
   const myPhotoUrl = useMemo(() => {
     const photos = photosQuery.data ?? [];
     const primary = photos.find(photo => photo.isPrimary) ?? photos[0];
     return primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null;
   }, [photosQuery.data]);
+
+  useEffect(() => {
+    setUsers(likedBy);
+    setCurrentIndex(0);
+    pan.setValue({ x: 0, y: 0 });
+  }, [data?.likedBy, hiddenLikedUserIds, pan]);
+
+  useEffect(() => {
+    const nextUser = users[currentIndex + 1];
+    if (!nextUser) return;
+    const primary = nextUser.photos.find(photo => photo.isPrimary) ?? nextUser.photos[0];
+    if (!primary) return;
+    Image.prefetch(getDisplayPhotoUrl(primary, 'thumbnail')).catch(() => {});
+  }, [users, currentIndex]);
+
+  const handleDecision = useCallback((direction: 'like' | 'nope') => {
+    const user = currentUserRef.current;
+    swipingRef.current = false;
+    pan.setValue({ x: 0, y: 0 });
+    setCurrentIndex(index => index + 1);
+
+    if (!user) return;
+
+    if (direction === 'nope') {
+      hideLikedUser(user.id);
+      if (accessToken) {
+        createSwipe(accessToken, user.id, 'DISLIKE').catch(() => null);
+      }
+      return;
+    }
+
+    matchMutation.mutate(user, {
+      onSuccess: ({ result }) => {
+        if (result.match) {
+          setMatchedUser(user);
+          setMatchedMatchId(result.match.id);
+        } else {
+          showToast(`${user.name} moved to your swipes`, 'info');
+        }
+      },
+      onError: (mutationError) => {
+        showToast(
+          mutationError instanceof Error ? mutationError.message : 'Failed to match',
+          'error'
+        );
+      },
+    });
+  }, [accessToken, matchMutation, pan]);
+
+  handleDecisionRef.current = handleDecision;
+
+  const animateSwipe = useCallback((direction: 'like' | 'nope') => {
+    if (swipingRef.current || !currentUserRef.current) return;
+    swipingRef.current = true;
+    const toX = direction === 'like' ? 500 : -500;
+    Animated.timing(pan, {
+      toValue: { x: toX, y: 0 },
+      duration: 260,
+      useNativeDriver: false,
+    }).start(() => handleDecisionRef.current(direction));
+  }, [pan]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 6,
+      onPanResponderMove: Animated.event(
+        [null, { dx: pan.x, dy: pan.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: (_, gesture) => {
+        const user = currentUserRef.current;
+        if (Math.abs(gesture.dx) < 8 && Math.abs(gesture.dy) < 8) {
+          if (user) {
+            router.push({
+              pathname: '/(main)/matches/[userId]',
+              params: { userId: user.id, source: 'likes' },
+            });
+          }
+          Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+          return;
+        }
+
+        if (!swipingRef.current && (gesture.dx > SWIPE_THRESHOLD || gesture.vx > 0.8)) {
+          swipingRef.current = true;
+          Animated.timing(pan, { toValue: { x: 500, y: gesture.dy }, duration: 260, useNativeDriver: false })
+            .start(() => handleDecisionRef.current('like'));
+        } else if (!swipingRef.current && (gesture.dx < -SWIPE_THRESHOLD || gesture.vx < -0.8)) {
+          swipingRef.current = true;
+          Animated.timing(pan, { toValue: { x: -500, y: gesture.dy }, duration: 260, useNativeDriver: false })
+            .start(() => handleDecisionRef.current('nope'));
+        } else {
+          Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+        }
+      },
+    })
+  ).current;
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -56,98 +166,57 @@ export default function LikesYouScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
-      <FlatList
-        data={likedBy}
-        keyExtractor={item => item.id}
-        numColumns={2}
-        showsVerticalScrollIndicator={false}
-        refreshing={isRefetching}
-        onRefresh={refetch}
-        contentContainerStyle={styles.content}
-        columnWrapperStyle={likedBy.length > 1 ? styles.row : undefined}
-        ListEmptyComponent={
+      <View style={styles.content}>
+        {isLoading || isRefetching ? (
           <View style={styles.emptyState}>
-            {isLoading ? (
-              <ActivityIndicator color={colors.primary} />
-            ) : (
-              <>
-                <Ionicons
-                  name={error ? 'lock-closed-outline' : 'heart-outline'}
-                  size={34}
-                  color={colors.primary}
-                />
-                <Text style={styles.emptyTitle}>
-                  {error ? 'Premium required' : 'No secret likes yet'}
-                </Text>
-                <Text style={styles.emptySubtext}>
-                  {error
-                    ? error instanceof Error
-                      ? error.message
-                      : 'Unlock premium to view this list.'
-                    : 'New likes will appear here when people swipe right on you.'}
-                </Text>
-                {error ? (
-                  <Pressable style={styles.retryButton} onPress={() => refetch()}>
-                    <Text style={styles.retryText}>Try again</Text>
-                  </Pressable>
-                ) : null}
-              </>
-            )}
+            <ActivityIndicator color={colors.primary} />
           </View>
-        }
-        renderItem={({ item }) => {
-          const primary = item.photos.find(photo => photo.isPrimary) ?? item.photos[0];
-          const photoUrl = primary ? getDisplayPhotoUrl(primary, 'thumbnail') : '';
-          const matchingThisUser = matchMutation.isPending && matchMutation.variables?.id === item.id;
-
-          return (
-            <Pressable
-              style={[styles.card, { width: cardWidth }]}
-              onPress={() => router.push({ pathname: '/(main)/matches/[userId]', params: { userId: item.id } })}
-            >
-              {photoUrl ? (
-                <Image source={{ uri: photoUrl }} style={styles.cardImage} contentFit="cover" />
-              ) : (
-                <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
-                  <Ionicons name="person" size={28} color={colors.grayIcon} />
-                </View>
-              )}
-              <View style={styles.cardGradient}>
-                <Text style={styles.cardName}>{item.name}, {item.age}</Text>
-                <Text style={styles.cardMeta}>{item.city ?? item.profile?.jobTitle ?? 'Liked your profile'}</Text>
-                <Pressable
-                  disabled={matchingThisUser}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    matchMutation.mutate(item, {
-                      onSuccess: ({ result }) => {
-                        if (result.match) {
-                          setMatchedUser(item);
-                          setMatchedMatchId(result.match.id);
-                        } else {
-                          showToast(`${item.name} moved to your swipes`, 'info');
-                        }
-                      },
-                      onError: (mutationError) => {
-                        showToast(
-                          mutationError instanceof Error ? mutationError.message : 'Failed to match',
-                          'error'
-                        );
-                      },
-                    });
-                  }}
-                  style={[styles.matchButton, matchingThisUser && styles.matchButtonDisabled]}
-                >
-                  <Ionicons name="heart" size={16} color="#FFFFFF" />
-                  <Text style={styles.matchButtonText}>
-                    {matchingThisUser ? 'Matching...' : 'Match'}
-                  </Text>
-                </Pressable>
-              </View>
+        ) : error ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="lock-closed-outline" size={34} color={colors.primary} />
+            <Text style={styles.emptyTitle}>Premium required</Text>
+            <Text style={styles.emptySubtext}>
+              {error instanceof Error ? error.message : 'Unlock premium to view this list.'}
+            </Text>
+            <Pressable style={styles.retryButton} onPress={() => refetch()}>
+              <Text style={styles.retryText}>Try again</Text>
             </Pressable>
-          );
-        }}
-      />
+          </View>
+        ) : currentDiscoveryUser ? (
+          <>
+            <View style={[styles.deck, { height: cardHeight + 38 }]}>
+              {users[currentIndex + 1] ? (
+                <View style={[styles.backCard, { height: cardHeight + 10 }]} />
+              ) : null}
+              <DiscoverCard
+                key={currentDiscoveryUser.id}
+                user={currentDiscoveryUser}
+                height={cardHeight}
+                pan={pan}
+                panHandlers={panResponder.panHandlers}
+              />
+            </View>
+            <View style={styles.likedActions}>
+              <Pressable style={styles.passButton} onPress={() => animateSwipe('nope')}>
+                <Ionicons name="close" size={32} color={colors.orange} />
+              </Pressable>
+              <Pressable style={styles.matchButtonLarge} onPress={() => animateSwipe('like')}>
+                <Ionicons name="heart" size={34} color="#FFFFFF" />
+                <Text style={styles.matchButtonLargeText}>Match</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.deckHint}>Swipe right to match, left to pass.</Text>
+          </>
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name="heart-outline" size={34} color={colors.primary} />
+            <Text style={styles.emptyTitle}>No secret likes yet</Text>
+            <Text style={styles.emptySubtext}>
+              New likes will appear here when people swipe right on you.
+            </Text>
+          </View>
+        )}
+      </View>
 
       {matchedUser ? (
         <MatchOverlay
@@ -212,63 +281,66 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   content: {
-    flexGrow: 1,
+    flex: 1,
     paddingHorizontal: 24,
     paddingTop: 12,
     paddingBottom: 34,
   },
-  row: {
-    gap: 14,
-  },
-  card: {
-    aspectRatio: 0.78,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: colors.line,
-    marginBottom: 14,
-  },
-  cardImage: {
-    width: '100%',
-    height: '100%',
-  },
-  cardImagePlaceholder: {
+  deck: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardGradient: {
+  backCard: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    padding: 14,
-    backgroundColor: 'rgba(16,17,22,0.45)',
+    left: 24,
+    right: 24,
+    top: 16,
+    borderRadius: 24,
+    backgroundColor: '#E8EEF5',
+    transform: [{ scale: 0.94 }],
   },
-  cardName: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '900',
+  deckHint: {
+    color: colors.muted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 14,
   },
-  cardMeta: {
-    color: 'rgba(255,255,255,0.82)',
-    fontSize: 12,
-    marginTop: 3,
-  },
-  matchButton: {
-    marginTop: 12,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.primary,
+  likedActions: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 18,
+    marginTop: 12,
   },
-  matchButtonDisabled: {
-    opacity: 0.72,
+  passButton: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
   },
-  matchButtonText: {
+  matchButtonLarge: {
+    minWidth: 158,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+  },
+  matchButtonLargeText: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 16,
     fontWeight: '900',
   },
   emptyState: {

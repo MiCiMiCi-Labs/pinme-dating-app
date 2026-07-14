@@ -20,7 +20,18 @@ import { markSwiped } from '@/lib/swipedUsers';
 import { showToast } from '@/stores/toast.store';
 
 export default function ProfileDetailScreen() {
-  const { userId, matchId } = useLocalSearchParams<{ userId: string; matchId?: string }>();
+  const {
+    userId,
+    matchId,
+    source,
+    photoUrl,
+  } = useLocalSearchParams<{
+    userId: string;
+    matchId?: string;
+    source?: string;
+    name?: string;
+    photoUrl?: string;
+  }>();
   const { session } = useAuth();
   const [user, setUser] = useState<PublicUser | null>(() => getCachedDiscoveryUser(userId));
   const [loading, setLoading] = useState(!getCachedDiscoveryUser(userId));
@@ -124,6 +135,20 @@ export default function ProfileDetailScreen() {
       createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
     }
     showStamp('nope', () => router.back());
+  };
+
+  const handleMessage = () => {
+    if (!user || !matchId) return;
+    const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+    router.push({
+      pathname: '/(main)/chats/[matchId]',
+      params: {
+        matchId,
+        userId: user.id,
+        name: user.name,
+        photoUrl: photoUrl ?? (primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : ''),
+      },
+    });
   };
 
   const getAccessToken = () => {
@@ -253,8 +278,9 @@ export default function ProfileDetailScreen() {
           user={user}
           onLike={handleLike}
           onDislike={handleDislike}
-          onChat={matchId ? handleChat : undefined}
+          onMessage={handleMessage}
           liked={liked}
+          variant={source === 'matches' ? 'matched' : 'discovery'}
         />
       </ScrollView>
     </SafeAreaView>
