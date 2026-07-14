@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChatPreviewRow } from '@/components/cards';
-import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
+import { colors, photos, ProfileThumb } from '@/design/system';
 import { type ChatMatch } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useChatMatches } from '@/queries/chat.queries';
@@ -124,6 +124,7 @@ export default function ChatListScreen() {
               pathname: '/(main)/chats/[matchId]',
               params: {
                 matchId: match.matchId,
+                userId: match.user.id,
                 name: match.user.name,
                 photoUrl: getPrimaryPhoto(match),
               },
@@ -134,7 +135,6 @@ export default function ChatListScreen() {
           <View>
             <View style={styles.header}>
               <Text style={styles.title}>Messages</Text>
-              <IconButton icon="refresh-outline" onPress={() => refetch()} />
             </View>
             <View style={styles.search}>
               <Ionicons name="search-outline" size={20} color={colors.grayIcon} />

@@ -1,5 +1,12 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
 import { prisma } from '../lib/prisma';
+
+const reportSchema = z.object({
+  reportedId: z.string().uuid(),
+  reason: z.string().trim().min(2).max(80),
+  description: z.string().trim().max(1000).optional(),
+}).strict();
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -17,17 +24,16 @@ export async function createReport(req: Request, res: Response) {
       return;
     }
 
-    const { reportedId, reason, description } = req.body;
-
-    if (!reportedId || typeof reportedId !== 'string') {
-      res.status(400).json({ error: 'reportedId is required' });
+    const parsedBody = reportSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      res.status(400).json({
+        error: 'Invalid report payload',
+        details: parsedBody.error.flatten().fieldErrors,
+      });
       return;
     }
 
-    if (!reason || typeof reason !== 'string') {
-      res.status(400).json({ error: 'reason is required' });
-      return;
-    }
+    const { reportedId, reason, description } = parsedBody.data;
 
     if (reporterId === reportedId) {
       res.status(400).json({ error: 'Cannot report yourself' });
@@ -48,7 +54,7 @@ export async function createReport(req: Request, res: Response) {
         reporterId,
         reportedId,
         reason,
-        description: description ?? null,
+        description: description || null,
       },
     });
 

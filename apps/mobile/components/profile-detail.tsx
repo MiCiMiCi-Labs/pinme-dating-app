@@ -7,7 +7,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, IconButton } from '@/design/system';
 import { type Photo, type PublicUser } from '@/lib/api';
 
-export function PhotoCarousel({ photos, height }: { photos: Photo[]; height: number }) {
+export function PhotoCarousel({
+  photos,
+  height,
+  onMorePress,
+}: {
+  photos: Photo[];
+  height: number;
+  onMorePress?: () => void;
+}) {
   const [index, setIndex] = useState(0);
   const indexRef = useRef(0);
   const current = photos[index] ?? null;
@@ -49,6 +57,9 @@ export function PhotoCarousel({ photos, height }: { photos: Photo[]; height: num
         style={styles.fade}
       />
       <IconButton icon="chevron-back" onPress={() => router.back()} style={styles.back} />
+      {onMorePress ? (
+        <IconButton icon="ellipsis-horizontal" onPress={onMorePress} style={styles.more} />
+      ) : null}
     </View>
   );
 }
@@ -247,6 +258,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 30,
     left: 28,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  more: {
+    position: 'absolute',
+    top: 30,
+    right: 28,
     backgroundColor: 'rgba(255,255,255,0.22)',
     borderColor: 'rgba(255,255,255,0.32)',
   },

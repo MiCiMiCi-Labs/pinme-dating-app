@@ -167,6 +167,7 @@ export default function LikesYouScreen() {
                 pathname: '/(main)/chats/[matchId]',
                 params: {
                   matchId,
+                  userId: matchedUser.id,
                   name: matchedUser.name,
                   photoUrl: primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '',
                 },

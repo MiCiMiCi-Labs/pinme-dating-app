@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
+import { hasBlockBetween } from '../lib/safety';
 
 const replySuggestionsSchema = z
   .object({
@@ -174,6 +175,12 @@ export async function generateReplySuggestions(req: Request, res: Response) {
 
     if (match.unmatchedAt) {
       res.status(409).json({ error: 'Cannot generate replies for an unmatched chat' });
+      return;
+    }
+
+    const otherUserId = match.user1Id === dbUserId ? match.user2Id : match.user1Id;
+    if (await hasBlockBetween(dbUserId, otherUserId)) {
+      res.status(403).json({ error: 'Cannot generate replies for this chat' });
       return;
     }
 

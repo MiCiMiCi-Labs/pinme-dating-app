@@ -12,11 +12,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
 import { colors } from '@/design/system';
-import { createSwipe, getUserById, type PublicUser } from '@/lib/api';
+import { blockUser as blockUserApi, createSwipe, getUserById, reportUser as reportUserApi, type PublicUser } from '@/lib/api';
 import { useAuth } from '@/contexts/auth';
 import { getCachedDiscoveryUser } from '@/lib/discovery-cache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { markSwiped } from '@/lib/swipedUsers';
+import { showToast } from '@/stores/toast.store';
 
 export default function ProfileDetailScreen() {
   const { userId, matchId } = useLocalSearchParams<{ userId: string; matchId?: string }>();
@@ -95,7 +96,7 @@ export default function ProfileDetailScreen() {
             text: 'Say hello',
             onPress: () => router.replace({
               pathname: '/(main)/chats/[matchId]',
-              params: { matchId: match.id, name: user.name, photoUrl: primaryPhotoUrl },
+              params: { matchId: match.id, userId: user.id, name: user.name, photoUrl: primaryPhotoUrl },
             }),
           },
         ]);
@@ -123,6 +124,76 @@ export default function ProfileDetailScreen() {
       createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
     }
     showStamp('nope', () => router.back());
+  };
+
+  const getAccessToken = () => {
+    const token = session?.access_token;
+    if (!token) {
+      showToast('Please log in again.', 'error');
+      return null;
+    }
+    return token;
+  };
+
+  const handleBlock = () => {
+    if (!user) return;
+
+    Alert.alert(
+      'Block this user?',
+      `${user.name} will no longer be able to interact with you. Existing chats and swipes will be hidden.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            const token = getAccessToken();
+            if (!token || !user) return;
+
+            try {
+              await blockUserApi(token, user.id);
+              markSwiped(user.id);
+              showToast('User blocked', 'success');
+              router.back();
+            } catch (err) {
+              showToast(err instanceof Error ? err.message : 'Failed to block user.', 'error');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const submitReport = async (reason: string) => {
+    if (!user) return;
+    const token = getAccessToken();
+    if (!token) return;
+
+    try {
+      await reportUserApi(token, { reportedId: user.id, reason });
+      showToast('Report submitted', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to report user.', 'error');
+    }
+  };
+
+  const handleReport = () => {
+    Alert.alert('Report profile', 'Choose the reason that best fits.', [
+      { text: 'Harassment or abuse', onPress: () => submitReport('Harassment or abuse') },
+      { text: 'Fake profile or scam', onPress: () => submitReport('Fake profile or scam') },
+      { text: 'Inappropriate content', onPress: () => submitReport('Inappropriate content') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const openSafetyMenu = () => {
+    if (!user) return;
+
+    Alert.alert(user.name, 'Safety options', [
+      { text: 'Report profile', onPress: handleReport },
+      { text: 'Block user', style: 'destructive', onPress: handleBlock },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   if (loading && !user) {
@@ -156,7 +227,7 @@ export default function ProfileDetailScreen() {
     <SafeAreaView style={styles.screen}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View>
-          <PhotoCarousel photos={photos} height={carouselHeight} />
+          <PhotoCarousel photos={photos} height={carouselHeight} onMorePress={openSafetyMenu} />
           {stamp !== null && (
             <Animated.View
               style={[

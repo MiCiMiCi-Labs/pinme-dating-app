@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { hasBlockBetween } from '../lib/safety';
 
 const VALID_ACTIONS = ['LIKE', 'DISLIKE', 'SUPER_LIKE'] as const;
 
@@ -42,6 +43,11 @@ export async function createSwipe(req: Request, res: Response) {
     });
     if (!targetExists) {
       res.status(404).json({ error: 'Target user not found' });
+      return;
+    }
+
+    if (await hasBlockBetween(swiperId, targetId)) {
+      res.status(403).json({ error: 'Cannot swipe this user' });
       return;
     }
 

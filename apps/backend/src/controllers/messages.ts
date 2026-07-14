@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma';
 import { supabase } from '../lib/supabase';
 import { CHAT_MEDIA_BUCKET, VOICE_BUCKET } from '../lib/storage';
 import { calculateChatIntimacy } from '../lib/intimacy';
+import { getBlockBetween } from '../lib/safety';
 
 const sendMessageSchema = z
   .object({
@@ -86,6 +87,12 @@ async function findAccessibleMatch(matchId: string, userId: string) {
 
   if (match.user1Id !== userId && match.user2Id !== userId) {
     return { match: null, status: 403 as const, error: 'Forbidden' };
+  }
+
+  const otherUserId = match.user1Id === userId ? match.user2Id : match.user1Id;
+  const block = await getBlockBetween(userId, otherUserId);
+  if (block) {
+    return { match: null, status: 403 as const, error: 'Chat is unavailable' };
   }
 
   return { match, status: null, error: null };

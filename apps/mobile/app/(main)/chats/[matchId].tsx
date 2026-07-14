@@ -6,13 +6,15 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
+  Alert,
   AppState,
   Easing,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,7 +24,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import {
+  blockUser as blockUserApi,
   getCallToken,
+  reportUser as reportUserApi,
   markMessagesRead,
   recallMessage,
   sendGifMessage,
@@ -45,7 +49,7 @@ import Constants from 'expo-constants';
 import { STICKERS } from '@/lib/stickers';
 import { readCachedThread, writeCachedThread } from '@/lib/chatMessageCache';
 import { useAccessToken, useAuthUserId } from '@/queries/auth';
-import { useMessages } from '@/queries/chat.queries';
+import { useChatMatches, useMessages } from '@/queries/chat.queries';
 import { useCurrentUser } from '@/queries/user.queries';
 import { GifBubble } from '@/components/chat/GifBubble';
 import { ImageBubble } from '@/components/chat/ImageBubble';
@@ -60,6 +64,7 @@ import {
   setActiveMatch,
   setPendingMessage,
 } from '@/stores/chatEvents.store';
+import { showToast } from '@/stores/toast.store';
 
 const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 15000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
@@ -206,10 +211,12 @@ function messagesAreEqual(a: LocalChatMessage[], b: LocalChatMessage[]): boolean
 export default function ChatRoomScreen() {
   const params = useLocalSearchParams<{
     matchId?: string;
+    userId?: string;
     name?: string;
     photoUrl?: string;
   }>();
   const matchId = firstParam(params.matchId);
+  const routeUserId = firstParam(params.userId);
   const name = firstParam(params.name) ?? 'Chat';
   const photoUrl = firstParam(params.photoUrl) ?? photos.redhead;
 
@@ -224,6 +231,7 @@ export default function ChatRoomScreen() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
@@ -251,6 +259,10 @@ export default function ChatRoomScreen() {
   const authUserId = useAuthUserId();
   const { data: currentUserData, refetch: refetchCurrentUser } = useCurrentUser();
   const { refetch: refetchMessages } = useMessages(matchId);
+  const { data: chatMatches } = useChatMatches();
+  const matchedUserId = routeUserId ?? (Array.isArray(chatMatches)
+    ? chatMatches.find(match => match.matchId === matchId)?.user.id
+    : undefined);
 
   const loadThread = useCallback(async (showLoading = true) => {
     if (!matchId) {
@@ -968,6 +980,79 @@ export default function ChatRoomScreen() {
     }
   };
 
+  const getTokenOrToast = () => {
+    if (!accessToken) {
+      showToast('Please log in again.', 'error');
+      return null;
+    }
+    return accessToken;
+  };
+
+  const handleBlockUser = () => {
+    if (!matchedUserId) {
+      showToast('Could not find this user to block.', 'error');
+      return;
+    }
+
+    Alert.alert(
+      'Block this user?',
+      `${name} will no longer be able to interact with you. This chat will be hidden.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            const token = getTokenOrToast();
+            if (!token) return;
+
+            try {
+              await blockUserApi(token, matchedUserId);
+              showToast('User blocked', 'success');
+              router.replace('/(main)/chats');
+            } catch (err) {
+              showToast(err instanceof Error ? err.message : 'Failed to block user.', 'error');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const submitReport = async (reason: string) => {
+    if (!matchedUserId) {
+      showToast('Could not find this user to report.', 'error');
+      return;
+    }
+
+    const token = getTokenOrToast();
+    if (!token) return;
+
+    try {
+      await reportUserApi(token, { reportedId: matchedUserId, reason });
+      showToast('Report submitted', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to report user.', 'error');
+    }
+  };
+
+  const handleReportUser = () => {
+    Alert.alert('Report profile', 'Choose the reason that best fits.', [
+      { text: 'Harassment or abuse', onPress: () => submitReport('Harassment or abuse') },
+      { text: 'Fake profile or scam', onPress: () => submitReport('Fake profile or scam') },
+      { text: 'Inappropriate content', onPress: () => submitReport('Inappropriate content') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const openSafetyMenu = () => {
+    Alert.alert(name, 'Safety options', [
+      { text: 'Report profile', onPress: handleReportUser },
+      { text: 'Block user', style: 'destructive', onPress: handleBlockUser },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   return (
     <SafeAreaView style={styles.screen}>
       <KeyboardAvoidingView
@@ -990,10 +1075,7 @@ export default function ChatRoomScreen() {
               </View>
             </View>
           </View>
-          <View style={styles.headerActions}>
-            <IconButton icon="call-outline" onPress={handleStartCall} />
-            <IconButton icon="refresh-outline" onPress={loadThread} />
-          </View>
+          <IconButton icon="ellipsis-horizontal" onPress={openSafetyMenu} />
         </View>
 
         <View style={styles.dayRow}>
@@ -1012,6 +1094,19 @@ export default function ChatRoomScreen() {
             style={styles.thread}
             contentContainerStyle={messages.length ? styles.threadContent : styles.emptyThread}
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={async () => {
+                  setRefreshing(true);
+                  try {
+                    await loadThread(false);
+                  } finally {
+                    setRefreshing(false);
+                  }
+                }}
+              />
+            }
             onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
           >
             {messages.length ? (
@@ -1120,6 +1215,13 @@ export default function ChatRoomScreen() {
 
         {actionsOpen && (
           <View style={styles.actionsTray}>
+            <Pressable style={styles.actionTile} onPress={() => {
+              setActionsOpen(false);
+              handleStartCall();
+            }}>
+              <Ionicons name="call-outline" size={22} color={colors.primary} />
+              <Text style={styles.actionLabel}>Call</Text>
+            </Pressable>
             <Pressable style={styles.actionTile} onPress={() => {
               setActionsOpen(false);
               handlePickMedia();

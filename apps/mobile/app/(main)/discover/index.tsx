@@ -286,6 +286,7 @@ export default function SwipeScreen() {
                 pathname: '/(main)/chats/[matchId]',
                 params: {
                   matchId: matchedMatchId,
+                  userId: matchedUser.id,
                   name: matchedUser.name,
                   photoUrl: primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '',
                 },

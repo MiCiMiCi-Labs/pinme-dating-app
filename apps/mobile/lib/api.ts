@@ -166,6 +166,27 @@ export type PrivacySettingsUpdateInput = {
   showOnlineStatus?: boolean;
 };
 
+export type BlockedUser = {
+  id: string;
+  name: string;
+  city: string | null;
+  photos: Photo[];
+};
+
+export type Block = {
+  id: string;
+  blockerId: string;
+  blockedId: string;
+  createdAt: string;
+  blocked?: BlockedUser;
+};
+
+export type ReportInput = {
+  reportedId: string;
+  reason: string;
+  description?: string;
+};
+
 async function parseResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => null);
 
@@ -316,6 +337,48 @@ export async function updatePrivacySettings(accessToken: string, data: PrivacySe
     body: JSON.stringify(data),
   });
   return parseResponse<PrivacySettings>(response);
+}
+
+// ─── Safety ────────────────────────────────────────────────────────────────
+
+export async function getBlockedUsers(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/blocks`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ blocks: Block[] }>(response);
+}
+
+export async function blockUser(accessToken: string, blockedId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/blocks`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ blockedId }),
+  });
+  return parseResponse<Block>(response);
+}
+
+export async function unblockUser(accessToken: string, blockedUserId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/blocks/${blockedUserId}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  if (response.status === 204) return;
+  return parseResponse<void>(response);
+}
+
+export async function reportUser(accessToken: string, data: ReportInput) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/reports`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+  return parseResponse<{ id: string; reporterId: string; reportedId: string; reason: string }>(response);
 }
 
 // ─── Voice Rooms ───────────────────────────────────────────────────────────
