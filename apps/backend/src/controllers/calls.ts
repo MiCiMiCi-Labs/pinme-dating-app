@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { AccessToken } from 'livekit-server-sdk';
 import { prisma } from '../lib/prisma';
+import { hasBlockBetween } from '../lib/safety';
 
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY ?? '';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET ?? '';
@@ -40,6 +41,12 @@ export async function getCallToken(req: Request, res: Response): Promise<void> {
 
   if (match.unmatchedAt) {
     res.status(403).json({ error: 'Match is no longer active' });
+    return;
+  }
+
+  const otherUserId = match.user1Id === dbUser.id ? match.user2Id : match.user1Id;
+  if (await hasBlockBetween(dbUser.id, otherUserId)) {
+    res.status(403).json({ error: 'Call is unavailable' });
     return;
   }
 

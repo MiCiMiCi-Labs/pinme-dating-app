@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { sanitizePublicProfile } from '../lib/publicProfile';
+import { hasBlockBetween } from '../lib/safety';
 
 function calculateAge(birthday: Date): number {
   const today = new Date();
@@ -18,6 +19,21 @@ export async function getUserById(req: Request, res: Response) {
 
     if (!id) {
       res.status(400).json({ error: 'User id is required' });
+      return;
+    }
+
+    const currentUser = await prisma.user.findUnique({
+      where: { supabaseAuthId: req.userId! },
+      select: { id: true },
+    });
+
+    if (!currentUser) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    if (await hasBlockBetween(currentUser.id, id)) {
+      res.status(403).json({ error: 'Profile is unavailable' });
       return;
     }
 

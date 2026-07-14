@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { blockUser, unblockUser } from '../controllers/blocks';
+import { blockUser, getBlockedUsers, unblockUser } from '../controllers/blocks';
 
 const router = Router();
 
 router.use(requireAuth);
+
+// GET    /api/v1/blocks
+router.get('/', getBlockedUsers);
 
 // POST   /api/v1/blocks               { blockedId }
 router.post('/', blockUser);

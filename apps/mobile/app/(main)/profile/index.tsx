@@ -14,6 +14,7 @@ import { ProfileStrengthCard } from '@/components/profile/ProfileStrengthCard';
 import { PhotoSummary } from '@/components/profile/PhotoSummary';
 import { ProfileSections } from '@/components/profile/ProfileSections';
 import { ProfileActions } from '@/components/profile/ProfileActions';
+import { ProfileSettingsSheet } from '@/components/profile/ProfileSettingsSheet';
 import { setProfileCompletion } from '@/stores/profileCompletion.store';
 import { showToast } from '@/stores/toast.store';
 
@@ -27,6 +28,7 @@ export default function MyProfileScreen() {
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [saving, setSaving] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [customInterest, setCustomInterest] = useState('');
   const currentUserQuery = useCurrentUser();
   const photosQuery = useMyPhotos();
@@ -204,7 +206,7 @@ export default function MyProfileScreen() {
   return (
     <View style={styles.screen}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <ProfileHeader loading={loading} />
+        <ProfileHeader loading={loading} onSettingsPress={() => setSettingsOpen(true)} />
         <ProfileStrengthCard percent={completion.percent} loading={loading} />
         <PhotoSummary photos={photoSlots} primaryVerified={primaryVerified} loading={loading} />
         <ProfileSections
@@ -221,8 +223,15 @@ export default function MyProfileScreen() {
           addCustomInterest={addCustomInterest}
           setCustomInterest={setCustomInterest}
         />
-        <ProfileActions saving={saving} onSave={saveChanges} onLogout={logout} />
+        <ProfileActions saving={saving} onSave={saveChanges} />
       </ScrollView>
+      <ProfileSettingsSheet
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onManagePhotos={() => router.push('/(main)/profile/photos')}
+        onBlockedUsers={() => router.push('/(main)/profile/blocked')}
+        onLogout={logout}
+      />
     </View>
   );
 }

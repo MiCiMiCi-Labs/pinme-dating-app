@@ -2,9 +2,12 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { IconButton, colors } from '@/design/system';
 
-type Props = { loading: boolean };
+type Props = {
+  loading: boolean;
+  onSettingsPress: () => void;
+};
 
-export const ProfileHeader = React.memo(function ProfileHeader({ loading }: Props) {
+export const ProfileHeader = React.memo(function ProfileHeader({ loading, onSettingsPress }: Props) {
   return (
     <View style={styles.header}>
       <View>
@@ -13,7 +16,7 @@ export const ProfileHeader = React.memo(function ProfileHeader({ loading }: Prop
           {loading ? 'Loading profile...' : 'Complete more details to unlock matching.'}
         </Text>
       </View>
-      <IconButton icon="settings-outline" />
+      <IconButton icon="settings-outline" onPress={onSettingsPress} />
     </View>
   );
 });

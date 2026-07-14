@@ -42,7 +42,7 @@ export async function blockUser(req: Request, res: Response) {
       where: { blockerId_blockedId: { blockerId, blockedId } },
     });
     if (existing) {
-      res.status(409).json({ error: 'User already blocked' });
+      res.status(200).json(existing);
       return;
     }
 
@@ -59,9 +59,49 @@ export async function blockUser(req: Request, res: Response) {
         },
         data: { unmatchedAt: new Date() },
       }),
+      prisma.swipe.deleteMany({
+        where: {
+          OR: [
+            { swiperId: blockerId, targetId: blockedId },
+            { swiperId: blockedId, targetId: blockerId },
+          ],
+        },
+      }),
     ]);
 
     res.status(201).json(block);
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+export async function getBlockedUsers(req: Request, res: Response) {
+  try {
+    const blockerId = await resolveDbUserId(req.userId!);
+    if (!blockerId) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const blocks = await prisma.block.findMany({
+      where: { blockerId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        blocked: {
+          select: {
+            id: true,
+            name: true,
+            city: true,
+            photos: {
+              orderBy: [{ isPrimary: 'desc' }, { orderIndex: 'asc' }],
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    res.json({ blocks });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }
