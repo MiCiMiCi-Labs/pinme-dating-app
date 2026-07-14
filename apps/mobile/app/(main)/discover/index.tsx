@@ -1,7 +1,15 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Animated,
+  PanResponder,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, DiscoverySkeleton, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
 import { type DiscoveryUser } from '@/lib/api';
@@ -14,7 +22,7 @@ import { getDisplayPhotoUrl } from '@/lib/photos';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 import { useCurrentUser } from '@/queries/user.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
-import { useCreateSwipe, useDiscoveryFeed } from '@/queries/discovery.queries';
+import { useCreateSwipe, useDiscoveryFeed, useResetDiscoveryFeed } from '@/queries/discovery.queries';
 import {
   setDiscoveryCurrentIndex,
   setDiscoveryFilterOpen,

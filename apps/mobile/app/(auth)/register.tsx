@@ -6,13 +6,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton } from '@/design/system';
 import { birthdayInputToIso, formatBirthdayInput } from '@/lib/birthday';
@@ -61,10 +61,10 @@ function getRegistrationValidationError({
 }
 
 export default function RegisterScreen() {
-  const [name, setName] = useState('Mia');
-  const [email, setEmail] = useState('123@gmail.com');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [birthday, setBirthday] = useState('01-01-2000');
+  const [birthday, setBirthday] = useState('');
   const [gender, setGender] = useState<Gender>('FEMALE');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);

@@ -6,18 +6,20 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   AppState,
+  Easing,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import {
   getCallToken,
@@ -235,6 +237,7 @@ export default function ChatRoomScreen() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingPulse = useRef(new Animated.Value(1)).current;
   const soundRef = useRef<Audio.Sound | null>(null);
   const videoRef = useRef<Video | null>(null);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -568,6 +571,33 @@ export default function ChatRoomScreen() {
     }
   };
 
+  useEffect(() => {
+    if (!isRecording) {
+      recordingPulse.setValue(1);
+      return;
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(recordingPulse, {
+          toValue: 0.35,
+          duration: 550,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(recordingPulse, {
+          toValue: 1,
+          duration: 550,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    loop.start();
+    return () => loop.stop();
+  }, [isRecording, recordingPulse]);
+
   const handleStartRecording = async () => {
     try {
       const { granted } = await Audio.requestPermissionsAsync();
@@ -587,6 +617,27 @@ export default function ChatRoomScreen() {
       }, 1000);
     } catch (_) {
       setError('Could not start recording.');
+    }
+  };
+
+  const handleCancelRecording = async () => {
+    if (!recordingRef.current) return;
+
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setIsRecording(false);
+    setRecordingSec(0);
+
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+
+    try {
+      await rec.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+    } catch (_) {
+      // recording already stopped or failed to load; nothing to clean up
     }
   };
 
@@ -1152,15 +1203,21 @@ export default function ChatRoomScreen() {
 
         <View style={styles.inputRow}>
           {isRecording ? (
-            <View style={styles.recordingRow}>
-              <View style={styles.recordingDot} />
-              <Text style={styles.recordingTimer}>
-                {`${Math.floor(recordingSec / 60)}:${String(recordingSec % 60).padStart(2, '0')}`}
-              </Text>
+            <>
+              <Pressable style={styles.cancelRecordingButton} onPress={handleCancelRecording}>
+                <Ionicons name="close" size={20} color={colors.muted} />
+              </Pressable>
+              <View style={styles.recordingRow}>
+                <Animated.View style={[styles.recordingDot, { opacity: recordingPulse }]} />
+                <Text style={styles.recordingLabel}>Recording</Text>
+                <Text style={styles.recordingTimer}>
+                  {`${Math.floor(recordingSec / 60)}:${String(recordingSec % 60).padStart(2, '0')}`}
+                </Text>
+              </View>
               <Pressable style={styles.stopButton} onPress={handleStopRecording}>
                 <Ionicons name="stop" size={22} color="#FFFFFF" />
               </Pressable>
-            </View>
+            </>
           ) : (
             <>
               <Pressable
@@ -1926,16 +1983,23 @@ const styles = StyleSheet.create({
   reactionPickerEmojiText: {
     fontSize: 28,
   },
+  cancelRecordingButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.soft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   recordingRow: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    height: 52,
-    paddingHorizontal: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.primary,
+    gap: 10,
+    height: 54,
+    paddingHorizontal: 18,
+    borderRadius: 27,
+    backgroundColor: 'rgba(239,68,68,0.08)',
   },
   recordingDot: {
     width: 10,
@@ -1943,19 +2007,30 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#EF4444',
   },
-  recordingTimer: {
+  recordingLabel: {
     flex: 1,
+    color: '#EF4444',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  recordingTimer: {
     color: colors.text,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   stopButton: {
     width: 54,
     height: 54,
-    borderRadius: 16,
+    borderRadius: 27,
     backgroundColor: '#EF4444',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#EF4444',
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   gifContainer: {
     width: 180,
