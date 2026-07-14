@@ -5,13 +5,13 @@ import {
   ActivityIndicator,
   FlatList,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChatPreviewRow } from '@/components/cards';
 import { colors, photos, ProfileThumb } from '@/design/system';
 import { type ChatMatch } from '@/lib/api';

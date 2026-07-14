@@ -7,12 +7,12 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MatchOverlay } from '@/components/discover';
 import { colors, IconButton } from '@/design/system';
 import { type DiscoveryUser, type PublicUser } from '@/lib/api';

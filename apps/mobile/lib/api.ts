@@ -567,11 +567,17 @@ export type DiscoveryUser = {
   photos: Photo[];
 };
 
-export async function getDiscoveryFeed(accessToken: string, limit = 20) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/discovery?limit=${limit}`, {
+export async function getDiscoveryFeed(
+  accessToken: string,
+  options: { limit?: number; cursor?: string } = {}
+) {
+  const { limit = 5, cursor } = options;
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set('cursor', cursor);
+  const response = await fetch(`${API_BASE_URL}/api/v1/discovery?${params}`, {
     headers: authHeaders(accessToken),
   });
-  return parseResponse<{ users: DiscoveryUser[] }>(response);
+  return parseResponse<{ users: DiscoveryUser[]; nextCursor: string | null }>(response);
 }
 
 // ─── Users ─────────────────────────────────────────────────────────────────

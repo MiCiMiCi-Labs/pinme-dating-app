@@ -3,9 +3,18 @@ import { useStore } from '@nanostores/react';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { PaywallModal } from '@/components/paywall-modal';
-import { colors, IconButton } from '@/design/system';
+import { colors } from '@/design/system';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useChatMatches, useLikesPreview } from '@/queries/chat.queries';
 import { useMySubscription, useRedeemPromoCode } from '@/queries/subscription.queries';
@@ -143,7 +152,6 @@ export default function MatchesScreen() {
     <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
         <Text style={styles.title}>Matches</Text>
-        <IconButton icon="options-outline" />
       </View>
       <FlatList
         data={matches}
@@ -165,7 +173,7 @@ export default function MatchesScreen() {
           return (
             <Pressable
               style={styles.card}
-              onPress={() => router.push({ pathname: '/(main)/matches/[userId]', params: { userId: user.id } })}
+              onPress={() => router.push({ pathname: '/(main)/matches/[userId]', params: { userId: user.id, matchId } })}
             >
               {primaryPhotoUrl ? (
                 <Image source={{ uri: primaryPhotoUrl }} style={styles.cardImage} contentFit="cover" />

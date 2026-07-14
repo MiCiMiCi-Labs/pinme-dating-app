@@ -53,9 +53,28 @@ function parseLimit(value: unknown): number {
   return Math.min(Math.max(limit, 1), 50);
 }
 
+function parseCursor(raw: string): { createdAt: string; id: string } {
+  const parsed: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    typeof (parsed as Record<string, unknown>).createdAt !== 'string' ||
+    typeof (parsed as Record<string, unknown>).id !== 'string'
+  ) {
+    throw new Error('invalid cursor');
+  }
+  return parsed as { createdAt: string; id: string };
+}
+
+function encodeCursor(data: { createdAt: string; id: string }): string {
+  return Buffer.from(JSON.stringify(data)).toString('base64url');
+}
+
 export async function getDiscoveryFeed(req: Request, res: Response) {
   try {
     const limit = parseLimit(req.query.limit);
+    const cursorParam =
+      typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
 
     const currentUser = await prisma.user.findUnique({
       where: { supabaseAuthId: req.userId! },
@@ -106,6 +125,24 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
       };
     }
 
+    if (cursorParam) {
+      try {
+        const cursor = parseCursor(cursorParam);
+        const cursorDate = new Date(cursor.createdAt);
+        where.AND = [
+          {
+            OR: [
+              { createdAt: { lt: cursorDate } },
+              { createdAt: { equals: cursorDate }, id: { lt: cursor.id } },
+            ],
+          },
+        ];
+      } catch {
+        // invalid cursor — start from beginning
+      }
+    }
+
+    const bufferSize = limit * 4;
     const candidates = await prisma.user.findMany({
       where,
       include: {
@@ -116,8 +153,8 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         location: true,
         privacySettings: true,
       },
-      orderBy: { createdAt: 'desc' },
-      take: limit * 3,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: bufferSize,
     });
 
     const users = candidates
@@ -159,7 +196,16 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         photos: candidate.photos,
       }));
 
-    res.json({ users });
+    const lastDbCandidate = candidates[candidates.length - 1];
+    const nextCursor =
+      candidates.length === bufferSize && lastDbCandidate
+        ? encodeCursor({
+            createdAt: lastDbCandidate.createdAt.toISOString(),
+            id: lastDbCandidate.id,
+          })
+        : null;
+
+    res.json({ users, nextCursor });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -80,7 +80,7 @@ function Badge({ emoji, label }: { emoji: string; label: string }) {
   );
 }
 
-export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user: PublicUser | null; onLike?: () => void; onDislike?: () => void; liked?: boolean }) {
+export function ProfileDetailContent({ user, onLike, onDislike, onChat, liked }: { user: PublicUser | null; onLike?: () => void; onDislike?: () => void; onChat?: () => void; liked?: boolean }) {
   const profile = user?.profile;
 
   const badges = [
@@ -226,9 +226,11 @@ export function ProfileDetailContent({ user, onLike, onDislike, liked }: { user:
         <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>
           <Ionicons name="close" size={28} color={colors.orange} />
         </Pressable>
-        <Pressable style={styles.bigAction} onPress={() => { /* TODO: navigate to chat */ }}>
-          <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
-        </Pressable>
+        {onChat ? (
+          <Pressable style={styles.bigAction} onPress={onChat}>
+            <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
+          </Pressable>
+        ) : null}
         <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
           <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
         </Pressable>
