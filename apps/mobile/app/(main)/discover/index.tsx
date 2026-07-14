@@ -1,7 +1,15 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Animated,
+  PanResponder,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, DiscoverySkeleton, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
 import { type DiscoveryUser } from '@/lib/api';
@@ -14,7 +22,7 @@ import { getDisplayPhotoUrl } from '@/lib/photos';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 import { useCurrentUser } from '@/queries/user.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
-import { useCreateSwipe, useDiscoveryFeed } from '@/queries/discovery.queries';
+import { useCreateSwipe, useDiscoveryFeed, useResetDiscoveryFeed } from '@/queries/discovery.queries';
 import {
   setDiscoveryCurrentIndex,
   setDiscoveryFilterOpen,
@@ -37,7 +45,7 @@ export default function SwipeScreen() {
 
   const pan = useRef(new Animated.ValueXY()).current;
   const swipingRef = useRef(false);
-  const feedLoadedRef = useRef(false);
+  const pageCountRef = useRef(0);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
   const currentUserQuery = useCurrentUser();
@@ -48,6 +56,8 @@ export default function SwipeScreen() {
   }, [currentUserQuery.data?.user, photosQuery.data]);
   const canDiscover = Boolean(completion && completion.percent >= matchingProfileCompletionThreshold);
   const feedQuery = useDiscoveryFeed(canDiscover);
+  const resetFeed = useResetDiscoveryFeed();
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = feedQuery;
   const swipeMutation = useCreateSwipe();
   const myPhotoUrl = useMemo(() => {
     const photos = photosQuery.data ?? [];
@@ -59,6 +69,7 @@ export default function SwipeScreen() {
 
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
+  const remaining = users.length - currentIndex;
 
   useEffect(() => {
     setDiscoveryCurrentIndex(currentIndex);
@@ -77,17 +88,23 @@ export default function SwipeScreen() {
     if (!canDiscover) {
       setUsers([]);
       setCurrentIndex(0);
-      feedLoadedRef.current = false;
+      pageCountRef.current = 0;
       return;
     }
-    const feed = feedQuery.data?.users;
-    if (!feed || feedLoadedRef.current) return;
-    feedLoadedRef.current = true;
-    cacheDiscoveryUsers(feed);
-    setUsers(filterSwiped(feed));
-    setCurrentIndex(0);
-    pan.setValue({ x: 0, y: 0 });
-  }, [canDiscover, feedQuery.data?.users, pan]);
+    const pages = feedQuery.data?.pages;
+    if (!pages || pages.length <= pageCountRef.current) return;
+    const newUsers = pages.slice(pageCountRef.current).flatMap(p => p.users);
+    const filtered = filterSwiped(newUsers);
+    cacheDiscoveryUsers(filtered);
+    if (pageCountRef.current === 0) {
+      setUsers(filtered);
+      setCurrentIndex(0);
+      pan.setValue({ x: 0, y: 0 });
+    } else {
+      setUsers(prev => [...prev, ...filtered]);
+    }
+    pageCountRef.current = pages.length;
+  }, [canDiscover, feedQuery.data?.pages, pan]);
 
   useEffect(() => {
     const nextUser = users[currentIndex + 1];
@@ -96,6 +113,12 @@ export default function SwipeScreen() {
     if (!primary) return;
     Image.prefetch(getDisplayPhotoUrl(primary, 'thumbnail')).catch(() => {});
   }, [users, currentIndex]);
+
+  useEffect(() => {
+    if (remaining <= 2 && hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  }, [remaining, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -202,13 +225,17 @@ export default function SwipeScreen() {
             </PrimaryButton>
           </View>
         ) : !currentUser ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>You're all caught up</Text>
-            <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
-          </View>
+          isFetchingNextPage || hasNextPage ? (
+            <DiscoverySkeleton height={cardHeight} />
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>You're all caught up</Text>
+              <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
+            </View>
+          )
         ) : (
           <>
-            {users[currentIndex + 1] ? (
+            {users[currentIndex + 1] || isFetchingNextPage ? (
               <View style={[styles.backCard, { height: cardHeight + 10 }]} />
             ) : null}
             <DiscoverCard
@@ -234,8 +261,11 @@ export default function SwipeScreen() {
         <FilterSheet
           onClose={() => setFilterOpen(false)}
           onApply={() => {
-            feedLoadedRef.current = false;
-            feedQuery.refetch();
+            pageCountRef.current = 0;
+            setUsers([]);
+            setCurrentIndex(0);
+            pan.setValue({ x: 0, y: 0 });
+            resetFeed();
           }}
         />
       ) : null}

@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,6 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { syncAuthUser } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton } from '@/design/system';
@@ -51,7 +51,7 @@ function getOAuthParams(url: string) {
 
 export default function LoginScreen() {
   const { height } = useWindowDimensions();
-  const [email, setEmail] = useState('123@gmail.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [phoneOtp, setPhoneOtp] = useState('');

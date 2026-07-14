@@ -8,7 +8,6 @@ import {
   Animated,
   PanResponder,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   useWindowDimensions,

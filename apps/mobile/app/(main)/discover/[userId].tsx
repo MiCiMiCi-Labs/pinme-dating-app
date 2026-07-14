@@ -1,6 +1,15 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
 import { colors } from '@/design/system';
 import { blockUser as blockUserApi, createSwipe, getUserById, reportUser as reportUserApi, type PublicUser } from '@/lib/api';
@@ -105,6 +114,16 @@ export default function ProfileDetailScreen() {
       } else {
         router.back();
       }
+    });
+  };
+
+  const handleChat = () => {
+    if (!user || !matchId) return;
+    const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+    const primaryPhotoUrl = primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '';
+    router.push({
+      pathname: '/(main)/chats/[matchId]',
+      params: { matchId, name: user.name, photoUrl: primaryPhotoUrl },
     });
   };
 
