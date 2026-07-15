@@ -13,6 +13,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, MatchOverlay } from '@/components/discover';
 import { colors, IconButton } from '@/design/system';
 import { createSwipe, type DiscoveryUser, type PublicUser } from '@/lib/api';

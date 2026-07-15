@@ -17,6 +17,7 @@ import { useAuth } from '@/contexts/auth';
 import { getCachedDiscoveryUser } from '@/lib/discovery-cache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { markSwiped } from '@/lib/swipedUsers';
+import { markDiscoveryNeedsRefresh } from '@/stores/discoveryUi.store';
 import { showToast } from '@/stores/toast.store';
 
 export default function ProfileDetailScreen() {
@@ -84,6 +85,7 @@ export default function ProfileDetailScreen() {
     if (!user || liked) return;
     setLiked(true);
     markSwiped(user.id);
+    markDiscoveryNeedsRefresh();
 
     const apiPromise = (async () => {
       if (!session?.access_token) return null;
@@ -117,19 +119,10 @@ export default function ProfileDetailScreen() {
     });
   };
 
-  const handleChat = () => {
-    if (!user || !matchId) return;
-    const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
-    const primaryPhotoUrl = primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '';
-    router.push({
-      pathname: '/(main)/chats/[matchId]',
-      params: { matchId, name: user.name, photoUrl: primaryPhotoUrl },
-    });
-  };
-
   const handleDislike = () => {
     if (!user) return;
     markSwiped(user.id);
+    markDiscoveryNeedsRefresh();
     const uid = user.id;
     if (session?.access_token) {
       createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
@@ -278,7 +271,7 @@ export default function ProfileDetailScreen() {
           user={user}
           onLike={handleLike}
           onDislike={handleDislike}
-          onMessage={handleMessage}
+          onMessage={matchId ? handleMessage : undefined}
           liked={liked}
           variant={source === 'matches' ? 'matched' : 'discovery'}
         />
