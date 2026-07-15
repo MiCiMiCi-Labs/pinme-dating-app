@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createSwipe, getDiscoveryFeed, type SwipeAction } from '@/lib/api';
 import { useAccessToken, useAuthUserId } from './auth';

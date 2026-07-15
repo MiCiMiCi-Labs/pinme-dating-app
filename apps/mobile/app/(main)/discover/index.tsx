@@ -28,6 +28,7 @@ import {
   DISCOVERY_PREFETCH_THRESHOLD,
   useCreateSwipe,
   useDiscoveryFeed,
+  useResetDiscoveryFeed,
 } from '@/queries/discovery.queries';
 import {
   $discoveryUi,

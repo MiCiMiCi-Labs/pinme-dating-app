@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
+import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
 import { sanitizePublicProfile } from '../lib/publicProfile';
 
@@ -9,16 +10,6 @@ async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
     select: { id: true },
   });
   return user?.id ?? null;
-}
-
-function calculateAge(birthday: Date): number {
-  const today = new Date();
-  let age = today.getFullYear() - birthday.getFullYear();
-  const monthDiff = today.getMonth() - birthday.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthday.getDate())) {
-    age -= 1;
-  }
-  return age;
 }
 
 async function getEligibleLikerIds(dbUserId: string) {

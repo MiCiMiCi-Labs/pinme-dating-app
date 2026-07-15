@@ -194,14 +194,25 @@ export function getVoiceRoomTags(_req: Request, res: Response) {
 
 export async function listVoiceRooms(req: Request, res: Response) {
   try {
+    const currentUser = await resolveDbUser(req.userId!);
+    if (!currentUser) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
     const limit = parseLimit(req.query.limit);
     const cursor = parseCursor(req.query.cursor);
     const search = parseSearch(req.query);
     const tags = parseTags(req.query);
+    // One batched query for all of the viewer's block relationships, reused
+    // both to exclude blocked owners' rooms and to filter each room's
+    // participant list below — avoids an hasBlockBetween call per row.
+    const blockedUserIds = await getBlockedUserIds(currentUser.id);
 
     const rooms = await prisma.voiceRoom.findMany({
       where: {
         isOpen: true,
+        ...(blockedUserIds.size > 0 ? { ownerId: { notIn: Array.from(blockedUserIds) } } : {}),
         ...(cursor ? { createdAt: { lt: cursor } } : {}),
         ...(tags.length ? { tags: { hasSome: tags } } : {}),
         ...(search
@@ -223,7 +234,7 @@ export async function listVoiceRooms(req: Request, res: Response) {
     const lastRoom = pageRooms[pageRooms.length - 1];
 
     res.json({
-      rooms: pageRooms.map(serializeRoom),
+      rooms: pageRooms.map(room => serializeRoom(room, blockedUserIds)),
       nextCursor: hasMore && lastRoom ? lastRoom.createdAt.toISOString() : null,
       hasMore,
     });
