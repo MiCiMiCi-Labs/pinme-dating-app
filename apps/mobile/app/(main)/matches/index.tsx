@@ -7,7 +7,7 @@ import { ActivityIndicator, FlatList, Pressable, SafeAreaView, ScrollView, Style
 import { PaywallModal } from '@/components/paywall-modal';
 import { colors, IconButton } from '@/design/system';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { useChatMatches, useLikesPreview } from '@/queries/chat.queries';
+import { useLikesPreview, useMatches } from '@/queries/chat.queries';
 import { useMySubscription, useRedeemPromoCode } from '@/queries/subscription.queries';
 import { $hiddenLikedUserIds } from '@/stores/likedYou.store';
 import { $matchEvents, markMatchRefreshHandled } from '@/stores/matchEvents.store';
@@ -95,7 +95,7 @@ export default function MatchesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [paywallVisible, setPaywallVisible] = useState(false);
   const [paywallError, setPaywallError] = useState<string | null>(null);
-  const { data, isLoading, refetch } = useChatMatches();
+  const { data, isLoading, refetch } = useMatches();
   const likesPreviewQuery = useLikesPreview();
   const subscriptionQuery = useMySubscription();
   const redeemPromoMutation = useRedeemPromoCode();

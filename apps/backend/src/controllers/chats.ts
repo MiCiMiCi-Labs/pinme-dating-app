@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { calculateChatIntimacy } from '../lib/intimacy';
 import { prisma } from '../lib/prisma';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
@@ -27,6 +28,7 @@ const otherUserInclude = {
     birthday: true,
     bio: true,
     city: true,
+    profile: true,
     photos: {
       orderBy: { orderIndex: 'asc' as const },
       take: 1,
@@ -52,7 +54,7 @@ function parseLimit(value: unknown): number {
   return Math.min(Math.max(limit, 1), 100);
 }
 
-export async function getMatches(req: Request, res: Response) {
+export async function getChats(req: Request, res: Response) {
   try {
     const limit = parseLimit(req.query.limit);
     const dbUserId = await resolveDbUserId(req.userId!);
@@ -69,64 +71,87 @@ export async function getMatches(req: Request, res: Response) {
       include: {
         user1: otherUserInclude,
         user2: otherUserInclude,
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            sender: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
 
+    const matchIds = matches.map(match => match.id);
+
+    const [unreadCounts, intimacyMessages] = matchIds.length
+      ? await Promise.all([
+          prisma.message.groupBy({
+            by: ['matchId'],
+            where: {
+              matchId: { in: matchIds },
+              senderId: { not: dbUserId },
+              isRead: false,
+            },
+            _count: { _all: true },
+          }),
+          prisma.message.findMany({
+            where: {
+              matchId: { in: matchIds },
+            },
+            select: {
+              matchId: true,
+              senderId: true,
+              messageType: true,
+              recalledAt: true,
+              createdAt: true,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: Math.min(Math.max(matchIds.length * 20, 100), 500),
+          }),
+        ])
+      : [[], []];
+
+    const unreadCountByMatchId = new Map(
+      unreadCounts.map(count => [count.matchId, count._count._all])
+    );
+
+    const intimacyMessagesByMatchId = new Map<string, typeof intimacyMessages>();
+    for (const message of intimacyMessages) {
+      const messagesForMatch = intimacyMessagesByMatchId.get(message.matchId) ?? [];
+      if (messagesForMatch.length < 200) {
+        messagesForMatch.push(message);
+        intimacyMessagesByMatchId.set(message.matchId, messagesForMatch);
+      }
+    }
+
     const result = matches.map((match) => {
       const other = match.user1Id === dbUserId ? match.user2 : match.user1;
       const { birthday, ...otherFields } = other;
+      const unreadCount = unreadCountByMatchId.get(match.id) ?? 0;
+      const intimacy = calculateChatIntimacy(
+        intimacyMessagesByMatchId.get(match.id) ?? [],
+        match.user1Id,
+        match.user2Id
+      );
 
       return {
         matchId: match.id,
         createdAt: match.createdAt,
+        lastMessage: match.messages[0] ?? null,
+        unreadCount,
+        intimacy,
         user: { ...otherFields, age: calculateAge(birthday) },
       };
     });
 
     res.json(result);
-  } catch {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-}
-
-export async function unmatch(req: Request, res: Response) {
-  try {
-    const matchId = req.params.matchId as string;
-
-    const dbUserId = await resolveDbUserId(req.userId!);
-    if (!dbUserId) {
-      res.status(404).json({ error: 'User not found' });
-      return;
-    }
-
-    const match = await prisma.match.findUnique({
-      where: { id: matchId },
-      select: { id: true, user1Id: true, user2Id: true, unmatchedAt: true },
-    });
-
-    if (!match) {
-      res.status(404).json({ error: 'Match not found' });
-      return;
-    }
-
-    if (match.user1Id !== dbUserId && match.user2Id !== dbUserId) {
-      res.status(403).json({ error: 'Forbidden' });
-      return;
-    }
-
-    if (match.unmatchedAt) {
-      res.status(409).json({ error: 'Already unmatched' });
-      return;
-    }
-
-    await prisma.match.update({
-      where: { id: matchId },
-      data: { unmatchedAt: new Date() },
-    });
-
-    res.status(204).send();
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

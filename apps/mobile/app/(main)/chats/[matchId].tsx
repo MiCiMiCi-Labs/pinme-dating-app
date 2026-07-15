@@ -10,6 +10,8 @@ import {
   AppState,
   KeyboardAvoidingView,
   Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   RefreshControl,
@@ -34,6 +36,7 @@ import {
   sendVoiceMessage,
   toggleReaction,
   type ChatIntimacy,
+  type ChatMessagesResponse,
   type ChatMessage,
   type Reaction,
   type ReplyPreview,
@@ -206,6 +209,28 @@ function messagesAreEqual(a: LocalChatMessage[], b: LocalChatMessage[]): boolean
   });
 }
 
+function flattenMessagePages(data?: { pages: ChatMessagesResponse[] }) {
+  const seen = new Set<string>();
+  const messages: ChatMessage[] = [];
+
+  data?.pages
+    .slice()
+    .reverse()
+    .flatMap(page => page.messages)
+    .forEach((message) => {
+      if (seen.has(message.id)) return;
+      seen.add(message.id);
+      messages.push(message);
+    });
+
+  messages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  return {
+    messages,
+    intimacy: data?.pages[0]?.intimacy ?? DEFAULT_INTIMACY,
+  };
+}
+
 export default function ChatRoomScreen() {
   const params = useLocalSearchParams<{
     matchId?: string;
@@ -222,6 +247,10 @@ export default function ChatRoomScreen() {
   const appStateRef = useRef(AppState.currentState);
   const currentUserIdRef = useRef<string | null>(null);
   const messagesRef = useRef<LocalChatMessage[]>([]);
+  const contentHeightRef = useRef(0);
+  const previousContentHeightRef = useRef(0);
+  const lastScrollYRef = useRef(0);
+  const preservingScrollOffsetRef = useRef(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryPayloads = useRef<Map<string, RetryPayload>>(new Map());
   const [messages, setMessages] = useState<LocalChatMessage[]>([]);
@@ -229,7 +258,6 @@ export default function ChatRoomScreen() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [replySuggestions, setReplySuggestions] = useState<string[]>([]);
@@ -255,7 +283,12 @@ export default function ChatRoomScreen() {
   const accessToken = useAccessToken();
   const authUserId = useAuthUserId();
   const { data: currentUserData, refetch: refetchCurrentUser } = useCurrentUser();
-  const { refetch: refetchMessages } = useMessages(matchId);
+  const {
+    refetch: refetchMessages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useMessages(matchId);
   const { data: chatMatches } = useChatMatches();
   const matchedUserId = routeUserId ?? (Array.isArray(chatMatches)
     ? chatMatches.find(match => match.matchId === matchId)?.user.id
@@ -280,23 +313,25 @@ export default function ChatRoomScreen() {
       let loadedIntimacy: ChatIntimacy;
 
       if (currentUserIdRef.current) {
-        const messagesResponse = (await refetchMessages()).data;
-        if (!messagesResponse) throw new Error('Failed to load messages');
-        loadedMessages = messagesResponse.messages;
-        loadedIntimacy = messagesResponse.intimacy ?? DEFAULT_INTIMACY;
+        const messagesData = (await refetchMessages()).data;
+        if (!messagesData) throw new Error('Failed to load messages');
+        const flattened = flattenMessagePages(messagesData);
+        loadedMessages = flattened.messages;
+        loadedIntimacy = flattened.intimacy;
       } else {
         const [userResult, messagesResult] = await Promise.all([
           currentUserData ? Promise.resolve({ data: currentUserData }) : refetchCurrentUser(),
           refetchMessages(),
         ]);
         const userResponse = userResult.data;
-        const messagesResponse = messagesResult.data;
-        if (!userResponse || !messagesResponse) throw new Error('Failed to load messages');
+        const messagesData = messagesResult.data;
+        if (!userResponse || !messagesData) throw new Error('Failed to load messages');
 
         currentUserIdRef.current = userResponse.user.id;
         setCurrentUserId(userResponse.user.id);
-        loadedMessages = messagesResponse.messages;
-        loadedIntimacy = messagesResponse.intimacy ?? DEFAULT_INTIMACY;
+        const flattened = flattenMessagePages(messagesData);
+        loadedMessages = flattened.messages;
+        loadedIntimacy = flattened.intimacy;
       }
 
       setIntimacy(loadedIntimacy);
@@ -371,6 +406,34 @@ export default function ChatRoomScreen() {
     if (!authUserId || !matchId || !messages.length) return;
     writeCachedThread(authUserId, matchId, messages, intimacy);
   }, [authUserId, intimacy, matchId, messages]);
+
+  const handleLoadOlderMessages = useCallback(async () => {
+    if (!hasNextPage || isFetchingNextPage || loading) return;
+
+    previousContentHeightRef.current = contentHeightRef.current;
+    preservingScrollOffsetRef.current = true;
+
+    try {
+      const result = await fetchNextPage();
+      const flattened = flattenMessagePages(result.data);
+
+      setIntimacy(flattened.intimacy);
+      setMessages(current => {
+        const pendingFailed = current.filter(message => message._status);
+        const merged = flattened.messages.reduce<LocalChatMessage[]>(
+          (acc, message) => mergeMessage(acc, message),
+          []
+        );
+
+        return [...merged, ...pendingFailed].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+      });
+    } catch (err) {
+      preservingScrollOffsetRef.current = false;
+      setError(err instanceof Error ? err.message : 'Failed to load earlier messages');
+    }
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, loading]);
 
   useEffect(() => {
     if (!matchId) return;
@@ -1002,6 +1065,36 @@ export default function ChatRoomScreen() {
     ]);
   };
 
+  const handleThreadScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const y = event.nativeEvent.contentOffset.y;
+    lastScrollYRef.current = y;
+
+    if (y <= 80) {
+      handleLoadOlderMessages();
+    }
+  };
+
+  const handleThreadContentSizeChange = (_width: number, height: number) => {
+    const previousHeight = contentHeightRef.current;
+    contentHeightRef.current = height;
+
+    if (preservingScrollOffsetRef.current) {
+      const delta = height - previousContentHeightRef.current;
+      preservingScrollOffsetRef.current = false;
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({
+          y: Math.max(0, lastScrollYRef.current + delta),
+          animated: false,
+        });
+      });
+      return;
+    }
+
+    if (previousHeight === 0) {
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+    }
+  };
+
   return (
     <SafeAreaView style={styles.screen}>
       <KeyboardAvoidingView
@@ -1045,19 +1138,20 @@ export default function ChatRoomScreen() {
             showsVerticalScrollIndicator={false}
             refreshControl={
               <RefreshControl
-                refreshing={refreshing}
-                onRefresh={async () => {
-                  setRefreshing(true);
-                  try {
-                    await loadThread(false);
-                  } finally {
-                    setRefreshing(false);
-                  }
-                }}
+                refreshing={isFetchingNextPage}
+                onRefresh={handleLoadOlderMessages}
               />
             }
-            onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
+            onScroll={handleThreadScroll}
+            scrollEventThrottle={16}
+            onContentSizeChange={handleThreadContentSizeChange}
           >
+            {isFetchingNextPage ? (
+              <View style={styles.olderLoadingRow}>
+                <ActivityIndicator color={colors.primary} size="small" />
+                <Text style={styles.olderLoadingText}>Loading earlier messages...</Text>
+              </View>
+            ) : null}
             {messages.length ? (
               messages.map(message => {
                 if (message.messageType === 'SYSTEM') {
@@ -1584,6 +1678,18 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  olderLoadingRow: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+  },
+  olderLoadingText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
   },
   emptyState: {
     alignItems: 'center',

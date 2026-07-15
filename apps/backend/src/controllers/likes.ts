@@ -106,51 +106,68 @@ export async function getLikesPreview(req: Request, res: Response) {
       return;
     }
 
-    const eligibleLikerIds = await getEligibleLikerIds(dbUserId);
+    const eligibleWhere = Prisma.sql`
+      FROM (
+        SELECT DISTINCT ON (s.swiper_id)
+          s.swiper_id,
+          s.created_at
+        FROM swipes s
+        WHERE s.target_id = ${dbUserId}
+          AND s.action IN ('LIKE'::"SwipeAction", 'SUPER_LIKE'::"SwipeAction")
+        ORDER BY s.swiper_id, s.created_at DESC
+      ) incoming
+      WHERE incoming.swiper_id <> ${dbUserId}
+        AND NOT EXISTS (
+          SELECT 1 FROM swipes mine
+          WHERE mine.swiper_id = ${dbUserId}
+            AND mine.target_id = incoming.swiper_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM blocks b
+          WHERE (b.blocker_id = ${dbUserId} AND b.blocked_id = incoming.swiper_id)
+             OR (b.blocker_id = incoming.swiper_id AND b.blocked_id = ${dbUserId})
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM matches m
+          WHERE m.unmatched_at IS NULL
+            AND (
+              (m.user1_id = ${dbUserId} AND m.user2_id = incoming.swiper_id)
+              OR (m.user2_id = ${dbUserId} AND m.user1_id = incoming.swiper_id)
+            )
+        )
+    `;
 
-    const previewPhotos = eligibleLikerIds.length
-      ? await prisma.photo.findMany({
-          where: {
-            userId: { in: eligibleLikerIds.slice(0, 12) },
-          },
-          orderBy: [
-            { isPrimary: 'desc' },
-            { orderIndex: 'asc' },
-            { createdAt: 'asc' },
-          ],
-          select: {
-            id: true,
-            userId: true,
-            url: true,
-            thumbnailUrl: true,
-            isPrimary: true,
-          },
-        })
-      : [];
-
-    const photoByUserId = new Map<string, (typeof previewPhotos)[number]>();
-    for (const photo of previewPhotos) {
-      if (!photoByUserId.has(photo.userId)) {
-        photoByUserId.set(photo.userId, photo);
-      }
-    }
-
-    const preview = eligibleLikerIds
-      .map(userId => {
-        const photo = photoByUserId.get(userId);
-        if (!photo) return null;
-        return {
-          userId,
-          photoUrl: photo.url,
-          thumbnailUrl: photo.thumbnailUrl ?? photo.url,
-        };
-      })
-      .filter((item): item is { userId: string; photoUrl: string; thumbnailUrl: string } => Boolean(item))
-      .slice(0, 3);
+    const [countRows, previewRows] = await Promise.all([
+      prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS count
+        ${eligibleWhere}
+      `),
+      prisma.$queryRaw<Array<{ userId: string; photoUrl: string; thumbnailUrl: string }>>(Prisma.sql`
+        SELECT
+          eligible.swiper_id AS "userId",
+          photo.url AS "photoUrl",
+          COALESCE(photo.thumbnail_url, photo.url) AS "thumbnailUrl"
+        FROM (
+          SELECT incoming.swiper_id, incoming.created_at
+          ${eligibleWhere}
+          ORDER BY incoming.created_at DESC
+          LIMIT 12
+        ) eligible
+        JOIN LATERAL (
+          SELECT p.url, p.thumbnail_url
+          FROM photos p
+          WHERE p.user_id = eligible.swiper_id
+          ORDER BY p.is_primary DESC, p.order_index ASC, p.created_at ASC
+          LIMIT 1
+        ) photo ON TRUE
+        ORDER BY eligible.created_at DESC
+        LIMIT 3
+      `),
+    ]);
 
     res.json({
-      count: eligibleLikerIds.length,
-      preview,
+      count: Number(countRows[0]?.count ?? 0),
+      preview: previewRows,
     });
   } catch (error) {
     console.error('[getLikesPreview] error:', error);

@@ -14,7 +14,13 @@ import { getDisplayPhotoUrl } from '@/lib/photos';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
 import { useCurrentUser } from '@/queries/user.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
-import { useCreateSwipe, useDiscoveryFeed } from '@/queries/discovery.queries';
+import {
+  DISCOVERY_MAX_BUFFER,
+  DISCOVERY_PAGE_SIZE,
+  DISCOVERY_PREFETCH_THRESHOLD,
+  useCreateSwipe,
+  useDiscoveryFeed,
+} from '@/queries/discovery.queries';
 import {
   setDiscoveryCurrentIndex,
   setDiscoveryFilterOpen,
@@ -37,7 +43,6 @@ export default function SwipeScreen() {
 
   const pan = useRef(new Animated.ValueXY()).current;
   const swipingRef = useRef(false);
-  const feedLoadedRef = useRef(false);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
   const currentUserQuery = useCurrentUser();
@@ -77,17 +82,31 @@ export default function SwipeScreen() {
     if (!canDiscover) {
       setUsers([]);
       setCurrentIndex(0);
-      feedLoadedRef.current = false;
       return;
     }
-    const feed = feedQuery.data?.users;
-    if (!feed || feedLoadedRef.current) return;
-    feedLoadedRef.current = true;
-    cacheDiscoveryUsers(feed);
-    setUsers(filterSwiped(feed));
-    setCurrentIndex(0);
-    pan.setValue({ x: 0, y: 0 });
-  }, [canDiscover, feedQuery.data?.users, pan]);
+    const pages = feedQuery.data?.pages;
+    if (!pages) return;
+
+    const uniqueUsers = new Map<string, DiscoveryUser>();
+    pages.flatMap(page => page.users).forEach((user) => {
+      if (!uniqueUsers.has(user.id)) uniqueUsers.set(user.id, user);
+    });
+
+    const nextUsers = filterSwiped(Array.from(uniqueUsers.values())).slice(0, DISCOVERY_MAX_BUFFER);
+    cacheDiscoveryUsers(nextUsers);
+    setUsers(nextUsers);
+    if (currentIndex >= nextUsers.length) {
+      setCurrentIndex(Math.max(0, nextUsers.length - 1));
+    }
+  }, [canDiscover, currentIndex, feedQuery.data?.pages]);
+
+  useEffect(() => {
+    if (!canDiscover || !feedQuery.hasNextPage || feedQuery.isFetchingNextPage) return;
+    const remaining = users.length - currentIndex - 1;
+    if (remaining <= DISCOVERY_PREFETCH_THRESHOLD) {
+      feedQuery.fetchNextPage().catch(() => null);
+    }
+  }, [canDiscover, currentIndex, feedQuery, users.length]);
 
   useEffect(() => {
     const nextUser = users[currentIndex + 1];
@@ -103,7 +122,13 @@ export default function SwipeScreen() {
     setDiscoverySwipeLocked(false);
     setDiscoveryLastSwipeAction(direction);
     pan.setValue({ x: 0, y: 0 });
-    setCurrentIndex(prev => prev + 1);
+    const nextIndex = currentIndex + 1;
+    if (nextIndex >= DISCOVERY_PAGE_SIZE) {
+      setUsers(current => current.slice(nextIndex));
+      setCurrentIndex(0);
+    } else {
+      setCurrentIndex(nextIndex);
+    }
 
     if (!user) return;
     markSwiped(user.id);
@@ -127,7 +152,7 @@ export default function SwipeScreen() {
     } catch (_) {
       // non-blocking — card already advanced
     }
-  }, [pan, swipeMutation]);
+  }, [currentIndex, pan, swipeMutation]);
 
   handleSwipeRef.current = handleSwipe;
 
@@ -201,6 +226,8 @@ export default function SwipeScreen() {
               Improve profile
             </PrimaryButton>
           </View>
+        ) : !currentUser && feedQuery.isFetchingNextPage ? (
+          <DiscoverySkeleton height={cardHeight} />
         ) : !currentUser ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>You're all caught up</Text>
@@ -234,7 +261,9 @@ export default function SwipeScreen() {
         <FilterSheet
           onClose={() => setFilterOpen(false)}
           onApply={() => {
-            feedLoadedRef.current = false;
+            setUsers([]);
+            setCurrentIndex(0);
+            pan.setValue({ x: 0, y: 0 });
             feedQuery.refetch();
           }}
         />

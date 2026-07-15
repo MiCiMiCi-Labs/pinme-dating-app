@@ -44,18 +44,28 @@ function fuzzyDistance(km: number | null): string | null {
 }
 
 function parseLimit(value: unknown): number {
-  const limit = Number(value ?? 20);
+  const limit = Number(value ?? 10);
 
   if (!Number.isInteger(limit)) {
-    return 20;
+    return 10;
   }
 
   return Math.min(Math.max(limit, 1), 50);
 }
 
+function parseCursor(value: unknown): Date | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date;
+}
+
 export async function getDiscoveryFeed(req: Request, res: Response) {
   try {
     const limit = parseLimit(req.query.limit);
+    const cursor = parseCursor(req.query.cursor);
 
     const currentUser = await prisma.user.findUnique({
       where: { supabaseAuthId: req.userId! },
@@ -83,6 +93,7 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
     const preferences = currentUser.preferences;
     const where: Prisma.UserWhereInput = {
       id: { notIn: Array.from(excludedUserIds) },
+      ...(cursor ? { createdAt: { lt: cursor } } : {}),
       profile: { isNot: null },
       photos: { some: {} },
       OR: [
@@ -106,6 +117,7 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
       };
     }
 
+    const candidateTake = limit * 4 + 1;
     const candidates = await prisma.user.findMany({
       where,
       include: {
@@ -117,10 +129,10 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         privacySettings: true,
       },
       orderBy: { createdAt: 'desc' },
-      take: limit * 3,
+      take: candidateTake,
     });
 
-    const users = candidates
+    const filteredUsers = candidates
       .map((candidate) => {
         const age = calculateAge(candidate.birthday);
         const distanceKm =
@@ -143,9 +155,9 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
           distanceKm <= preferences.maxDistanceKm;
 
         return matchesMinAge && matchesMaxAge && matchesDistance;
-      })
-      .slice(0, limit)
-      .map(({ candidate, age, distanceKm }) => ({
+      });
+
+    const users = filteredUsers.slice(0, limit).map(({ candidate, age, distanceKm }) => ({
         id: candidate.id,
         name: candidate.name,
         gender: candidate.gender,
@@ -159,7 +171,13 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         photos: candidate.photos,
       }));
 
-    res.json({ users });
+    const lastScannedCandidate = candidates[candidates.length - 1];
+    const nextCursor =
+      candidates.length === candidateTake && lastScannedCandidate
+        ? lastScannedCandidate.createdAt.toISOString()
+        : null;
+
+    res.json({ users, nextCursor });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
   }

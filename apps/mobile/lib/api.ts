@@ -413,6 +413,12 @@ export type VoiceRoom = {
   participants: VoiceRoomParticipant[];
 };
 
+export type VoiceRoomsResponse = {
+  rooms: VoiceRoom[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
 export async function getVoiceRoomTags(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms/tags`, {
     headers: authHeaders(accessToken),
@@ -420,12 +426,28 @@ export async function getVoiceRoomTags(accessToken: string) {
   return parseResponse<{ tags: string[] }>(response);
 }
 
-export async function getVoiceRooms(accessToken: string, search = '') {
-  const params = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
-  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms${params}`, {
+export async function getVoiceRooms(
+  accessToken: string,
+  searchOrOptions: string | {
+    search?: string;
+    tag?: string | null;
+    limit?: number;
+    cursor?: string | null;
+  } = ''
+) {
+  const options = typeof searchOrOptions === 'string'
+    ? { search: searchOrOptions }
+    : searchOrOptions;
+  const params = new URLSearchParams({ limit: String(options.limit ?? 20) });
+  const search = options.search?.trim();
+  if (search) params.set('query', search);
+  if (options.tag) params.set('tag', options.tag);
+  if (options.cursor) params.set('cursor', options.cursor);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/voice-rooms?${params.toString()}`, {
     headers: authHeaders(accessToken),
   });
-  return parseResponse<{ rooms: VoiceRoom[] }>(response);
+  return parseResponse<VoiceRoomsResponse>(response);
 }
 
 export async function createVoiceRoom(accessToken: string, data: { name: string; tags: string[] }) {
@@ -567,11 +589,19 @@ export type DiscoveryUser = {
   photos: Photo[];
 };
 
-export async function getDiscoveryFeed(accessToken: string, limit = 20) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/discovery?limit=${limit}`, {
+export type DiscoveryFeedResponse = {
+  users: DiscoveryUser[];
+  nextCursor: string | null;
+};
+
+export async function getDiscoveryFeed(accessToken: string, limit = 10, cursor?: string | null) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set('cursor', cursor);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/discovery?${params.toString()}`, {
     headers: authHeaders(accessToken),
   });
-  return parseResponse<{ users: DiscoveryUser[] }>(response);
+  return parseResponse<DiscoveryFeedResponse>(response);
 }
 
 // ─── Users ─────────────────────────────────────────────────────────────────
@@ -671,6 +701,20 @@ export type ChatMatch = {
     gender: string;
     bio: string | null;
     city: string | null;
+    photos: Photo[];
+  };
+};
+
+export type MatchSummary = {
+  matchId: string;
+  createdAt: string;
+  user: {
+    id: string;
+    name: string;
+    age: number;
+    gender: string;
+    bio: string | null;
+    city: string | null;
     profile: AppProfile | null;
     photos: Photo[];
   };
@@ -735,21 +779,46 @@ export async function getCallToken(accessToken: string, matchId: string) {
   return parseResponse<{ url: string; token: string; roomName: string }>(response);
 }
 
-export async function getChatMatches(accessToken: string) {
+export async function getMatches(accessToken: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
     headers: authHeaders(accessToken),
   });
-  const data = await parseResponse<ChatMatch[] | { matches?: ChatMatch[] }>(response);
+  const data = await parseResponse<MatchSummary[] | { matches?: MatchSummary[] }>(response);
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.matches)) return data.matches;
   return [];
 }
 
-export async function getMessages(accessToken: string, matchId: string, limit = 50) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}?limit=${limit}`, {
+export async function getChatMatches(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/chats`, {
     headers: authHeaders(accessToken),
   });
-  return parseResponse<{ messages: ChatMessage[]; intimacy: ChatIntimacy }>(response);
+  const data = await parseResponse<ChatMatch[] | { chats?: ChatMatch[]; matches?: ChatMatch[] }>(response);
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.chats)) return data.chats;
+  if (data && Array.isArray(data.matches)) return data.matches;
+  return [];
+}
+
+export type ChatMessagesResponse = {
+  messages: ChatMessage[];
+  intimacy: ChatIntimacy;
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+export async function getMessages(
+  accessToken: string,
+  matchId: string,
+  options: { limit?: number; before?: string | null } = {}
+) {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 30) });
+  if (options.before) params.set('before', options.before);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/messages/${matchId}?${params.toString()}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<ChatMessagesResponse>(response);
 }
 
 export async function getReplySuggestions(

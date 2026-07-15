@@ -45,7 +45,8 @@ function RootNavigator() {
 
     const inMain = segments[0] === '(main)';
     const inAuth = segments[0] === '(auth)';
-    const inCompleteProfile = inAuth && segments[1] === 'complete-profile';
+    const inCompleteProfile =
+      segments[0] === 'complete-profile' || (inAuth && segments[1] === 'complete-profile');
 
     if (!session) {
       if (inMain) {
@@ -58,7 +59,7 @@ function RootNavigator() {
 
     if (!profileComplete) {
       if (!inCompleteProfile) {
-        router.replace('/(auth)/complete-profile');
+        router.replace('/complete-profile');
       }
       return;
     }
@@ -75,6 +76,7 @@ function RootNavigator() {
       <StatusBar style="auto" />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="complete-profile" />
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(main)" />
       </Stack>
