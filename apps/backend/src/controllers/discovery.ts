@@ -1,29 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
 import { sanitizePublicProfile } from '../lib/publicProfile';
-
-function calculateAge(birthday: Date): number {
-  // Use UTC calendar-date getters throughout — birthday is stored as a UTC
-  // date-only value (@db.Date), and this must stay in lockstep with the
-  // birthdayFilter boundary logic below, which is also UTC-anchored. Mixing
-  // local-timezone getters here with UTC ones there would let a user pass the
-  // age filter under one date but be reported with a different age under the
-  // other, particularly around local midnight in timezones ahead of UTC
-  // (e.g. Pacific/Auckland).
-  const today = new Date();
-  let age = today.getUTCFullYear() - birthday.getUTCFullYear();
-  const monthDiff = today.getUTCMonth() - birthday.getUTCMonth();
-
-  if (
-    monthDiff < 0 ||
-    (monthDiff === 0 && today.getUTCDate() < birthday.getUTCDate())
-  ) {
-    age -= 1;
-  }
-
-  return age;
-}
 
 function calculateDistanceKm(
   from: { latitude: number; longitude: number },

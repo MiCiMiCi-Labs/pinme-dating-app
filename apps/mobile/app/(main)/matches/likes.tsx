@@ -16,12 +16,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, MatchOverlay } from '@/components/discover';
 import { colors, IconButton } from '@/design/system';
-import { createSwipe, type DiscoveryUser, type PublicUser } from '@/lib/api';
+import { type DiscoveryUser, type PublicUser } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { useLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
+import { useDislikeFromLikesList, useLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
-import { useAccessToken } from '@/queries/auth';
-import { $hiddenLikedUserIds, hideLikedUser } from '@/stores/likedYou.store';
+import { $hiddenLikedUserIds } from '@/stores/likedYou.store';
 import { showToast } from '@/stores/toast.store';
 
 const SWIPE_THRESHOLD = 100;
@@ -42,7 +41,7 @@ export default function LikesYouScreen() {
   const { data, isLoading, error, refetch, isRefetching } = useLikesList();
   const photosQuery = useMyPhotos();
   const matchMutation = useMatchFromLikesList();
-  const accessToken = useAccessToken();
+  const dislikeMutation = useDislikeFromLikesList();
   const hiddenLikedUserIds = useStore($hiddenLikedUserIds);
   const likedBy = (data?.likedBy ?? []).filter(user => !hiddenLikedUserIds.has(user.id));
   const cardHeight = Math.min(height * 0.54, 440);
@@ -82,10 +81,14 @@ export default function LikesYouScreen() {
     if (!user) return;
 
     if (direction === 'nope') {
-      hideLikedUser(user.id);
-      if (accessToken) {
-        createSwipe(accessToken, user.id, 'DISLIKE').catch(() => null);
-      }
+      dislikeMutation.mutate(user, {
+        onError: (mutationError) => {
+          showToast(
+            mutationError instanceof Error ? mutationError.message : 'Failed to pass on user',
+            'error'
+          );
+        },
+      });
       return;
     }
 
@@ -105,7 +108,7 @@ export default function LikesYouScreen() {
         );
       },
     });
-  }, [accessToken, matchMutation, pan]);
+  }, [dislikeMutation, matchMutation, pan]);
 
   handleDecisionRef.current = handleDecision;
 

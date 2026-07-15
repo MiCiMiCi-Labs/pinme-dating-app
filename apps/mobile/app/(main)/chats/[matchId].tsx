@@ -65,6 +65,7 @@ import {
   setPendingMessage,
 } from '@/stores/chatEvents.store';
 import { showToast } from '@/stores/toast.store';
+import { markVoiceRoomNeedsRefresh } from '@/stores/voiceRoom.store';
 
 const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 15000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
@@ -1008,6 +1009,7 @@ export default function ChatRoomScreen() {
 
             try {
               await blockUserApi(token, matchedUserId);
+              markVoiceRoomNeedsRefresh();
               showToast('User blocked', 'success');
               router.replace('/(main)/chats');
             } catch (err) {
