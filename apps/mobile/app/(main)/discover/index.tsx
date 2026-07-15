@@ -24,6 +24,8 @@ import { useCurrentUser } from '@/queries/user.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
 import { useCreateSwipe, useDiscoveryFeed, useResetDiscoveryFeed } from '@/queries/discovery.queries';
 import {
+  $discoveryUi,
+  markDiscoveryRefreshHandled,
   setDiscoveryCurrentIndex,
   setDiscoveryFilterOpen,
   setDiscoveryLastSwipeAction,
@@ -78,6 +80,17 @@ export default function SwipeScreen() {
   useEffect(() => {
     setDiscoveryFilterOpen(filterOpen);
   }, [filterOpen]);
+
+  useEffect(() => {
+    const unsubscribe = $discoveryUi.subscribe((state) => {
+      if (!state.discoveryNeedsRefresh) return;
+      markDiscoveryRefreshHandled();
+      pan.setValue({ x: 0, y: 0 });
+      setCurrentIndex(prev => prev + 1);
+    });
+
+    return unsubscribe;
+  }, [pan]);
 
   useEffect(() => {
     if (!completion) return;

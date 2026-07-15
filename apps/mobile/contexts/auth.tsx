@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import {
+  ApiError,
   getMyProfile,
   type AppProfile,
   type AppUser,
@@ -85,7 +86,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const { user, profile } = await getMyProfile(session.access_token);
         complete = hasCompleteProfile(user, profile);
-      } catch {
+      } catch (err) {
+        // A 401 here means the access token itself is invalid/expired, not that
+        // the profile is incomplete — sign out so the user is routed back to
+        // login instead of being shown the complete-profile onboarding flow.
+        if (err instanceof ApiError && err.status === 401) {
+          await supabase.auth.signOut();
+        }
         complete = false;
       }
 
@@ -113,7 +120,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const complete = hasCompleteProfile(user, profile);
       setProfileComplete(complete);
       return complete;
-    } catch (_) {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        await supabase.auth.signOut();
+      }
       setProfileComplete(false);
       return false;
     }

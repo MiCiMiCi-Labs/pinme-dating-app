@@ -248,9 +248,11 @@ export function ProfileDetailContent({
           <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>
             <Ionicons name="close" size={28} color={colors.orange} />
           </Pressable>
-          <Pressable style={styles.bigAction} onPress={onMessage}>
-            <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
-          </Pressable>
+          {onMessage ? (
+            <Pressable style={styles.bigAction} onPress={onMessage}>
+              <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
           <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
             <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
           </Pressable>
