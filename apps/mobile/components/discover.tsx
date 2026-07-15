@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { colors, PrimaryButton } from '@/design/system';
+import { colors, PrimaryButton, RoundActionButton } from '@/design/system';
 import {
   getMyPreferences,
   getPrivacySettings,
@@ -127,15 +127,9 @@ export function DiscoverCard({
 export function SwipeActions({ onNope, onLike }: { onNope: () => void; onLike: () => void }) {
   return (
     <View style={styles.actionRow}>
-      <Pressable style={styles.smallAction} onPress={onNope}>
-        <Ionicons name="close" size={32} color={colors.orange} />
-      </Pressable>
-      <Pressable style={styles.bigAction} onPress={onLike}>
-        <Ionicons name="heart" size={48} color="#FFFFFF" />
-      </Pressable>
-      <Pressable style={styles.smallAction}>
-        <Ionicons name="star" size={32} color={colors.purple} />
-      </Pressable>
+      <RoundActionButton icon="close" color={colors.orange} onPress={onNope} />
+      <RoundActionButton icon="heart" filled size={102} iconSize={48} onPress={onLike} />
+      <RoundActionButton icon="star" color={colors.purple} />
     </View>
   );
 }

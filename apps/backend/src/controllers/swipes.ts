@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { hasBlockBetween } from '../lib/safety';
+import { notifyMatchCreated } from '../lib/notifications';
 
 const VALID_ACTIONS = ['LIKE', 'DISLIKE', 'SUPER_LIKE'] as const;
 
@@ -105,6 +106,10 @@ export async function createSwipe(req: Request, res: Response) {
             isRead: true,
           },
           include: { sender: { select: { id: true, name: true } } },
+        });
+
+        void notifyMatchCreated(match).catch(error => {
+          console.warn('[createSwipe] match notification failed:', error);
         });
       }
     }

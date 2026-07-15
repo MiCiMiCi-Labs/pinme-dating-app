@@ -7,6 +7,7 @@ import {
   type AppProfile,
   type AppUser,
 } from '@/lib/api';
+import { registerForPushNotifications } from '@/lib/pushNotifications';
 
 type AuthContextType = {
   session: Session | null;
@@ -108,6 +109,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [session?.access_token]);
+
+  useEffect(() => {
+    if (!session?.access_token || !profileComplete) return;
+
+    registerForPushNotifications(session.access_token).catch(error => {
+      console.warn('[push] Failed to register push token:', error);
+    });
+  }, [profileComplete, session?.access_token]);
 
   const refreshProfileCompletion = async () => {
     if (!session?.access_token) {

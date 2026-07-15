@@ -9,35 +9,36 @@ datasource db {
 }
 
 model User {
-  id              String           @id @default(uuid())
-  email           String?          @unique
-  phone           String?          @unique
-  name            String
-  gender          Gender
-  birthday        DateTime         @db.Date
-  bio             String?
-  city            String?
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
-  supabaseAuthId  String           @unique
-  blocksReceived  Block[]          @relation("BlockedBlocks")
-  blocksGiven     Block[]          @relation("BlockerBlocks")
-  location        Location?
-  matchesAsUser1  Match[]          @relation("User1Matches")
-  matchesAsUser2  Match[]          @relation("User2Matches")
-  messagesSent              Message[]
-  messageReactions          MessageReaction[]
-  photos                    Photo[]
-  preferences               Preference?
-  privacySettings           PrivacySettings?
-  profile                   Profile?
-  reportsReceived           Report[]                @relation("ReportedReports")
-  reportsGiven              Report[]                @relation("ReporterReports")
-  swipesGiven               Swipe[]                 @relation("SwiperSwipes")
-  swipesReceived            Swipe[]                 @relation("TargetSwipes")
-  ownedVoiceRooms           VoiceRoom[]             @relation("VoiceRoomOwner")
-  voiceRoomParticipations   VoiceRoomParticipant[]
-  subscription              Subscription?
+  id                      String                 @id @default(uuid())
+  email                   String?                @unique
+  phone                   String?                @unique
+  name                    String
+  gender                  Gender
+  birthday                DateTime               @db.Date
+  bio                     String?
+  city                    String?
+  createdAt               DateTime               @default(now()) @map("created_at")
+  updatedAt               DateTime               @updatedAt @map("updated_at")
+  supabaseAuthId          String                 @unique
+  blocksReceived          Block[]                @relation("BlockedBlocks")
+  blocksGiven             Block[]                @relation("BlockerBlocks")
+  location                Location?
+  matchesAsUser1          Match[]                @relation("User1Matches")
+  matchesAsUser2          Match[]                @relation("User2Matches")
+  messagesSent            Message[]
+  messageReactions        MessageReaction[]
+  photos                  Photo[]
+  preferences             Preference?
+  privacySettings         PrivacySettings?
+  profile                 Profile?
+  reportsReceived         Report[]               @relation("ReportedReports")
+  reportsGiven            Report[]               @relation("ReporterReports")
+  swipesGiven             Swipe[]                @relation("SwiperSwipes")
+  swipesReceived          Swipe[]                @relation("TargetSwipes")
+  ownedVoiceRooms         VoiceRoom[]            @relation("VoiceRoomOwner")
+  voiceRoomParticipations VoiceRoomParticipant[]
+  subscription            Subscription?
+  pushTokens              PushToken[]
 
   @@map("users")
 }
@@ -279,6 +280,20 @@ model Subscription {
   user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("subscriptions")
+}
+
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  platform  String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@map("push_tokens")
 }
 
 enum Gender {

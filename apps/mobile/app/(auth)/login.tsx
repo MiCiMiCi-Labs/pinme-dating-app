@@ -18,7 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { syncAuthUser } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
-import { colors, LogoMark, PrimaryButton } from '@/design/system';
+import { colors, LogoMark, PrimaryButton, SocialIconButton, TextButton } from '@/design/system';
 import { InfoModal } from '@/components/info-modal';
 
 const oauthRedirectTo = Linking.createURL('auth/callback');
@@ -328,16 +328,16 @@ export default function LoginScreen() {
 
                 <View style={styles.socialRow}>
                   {Platform.OS === 'ios' ? (
-                    <SocialButton
+                    <SocialIconButton
                       icon="logo-apple"
                       onPress={() => setAppleUnavailableVisible(true)}
                     />
                   ) : null}
-                  <SocialButton
+                  <SocialIconButton
                     icon="logo-google"
                     onPress={() => loginWithOAuthProvider('google')}
                   />
-                  <SocialButton
+                  <SocialIconButton
                     icon="logo-facebook"
                     onPress={() => loginWithOAuthProvider('facebook')}
                   />
@@ -363,9 +363,9 @@ export default function LoginScreen() {
                 </PrimaryButton>
                 <View style={styles.registerRow}>
                   <Text style={styles.registerText}>New here? </Text>
-                  <Pressable onPress={() => router.push('/(auth)/register')}>
-                    <Text style={styles.registerLink}>Create an account</Text>
-                  </Pressable>
+                  <TextButton onPress={() => router.push('/(auth)/register')}>
+                    Create an account
+                  </TextButton>
                 </View>
               </>
             ) : null}
@@ -379,17 +379,6 @@ export default function LoginScreen() {
         onClose={() => setAppleUnavailableVisible(false)}
       />
     </SafeAreaView>
-  );
-}
-
-function SocialButton({ icon, onPress }: {
-  icon: keyof typeof Ionicons.glyphMap;
-  onPress?: () => void;
-}) {
-  return (
-    <Pressable style={styles.socialButton} onPress={onPress}>
-      <Ionicons name={icon} size={24} color={colors.text} />
-    </Pressable>
   );
 }
 
@@ -552,10 +541,5 @@ const styles = StyleSheet.create({
   registerText: {
     color: colors.muted,
     fontSize: 14,
-  },
-  registerLink: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '800',
   },
 });
