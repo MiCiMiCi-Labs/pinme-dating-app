@@ -237,12 +237,14 @@ export function ProfileDetailContent({
       </View>
 
       {variant === 'matched' ? (
-        <View style={styles.matchedAction}>
-          <Pressable style={styles.messageButton} onPress={onMessage}>
-            <Ionicons name="chatbubble-ellipses" size={22} color="#FFFFFF" />
-            <Text style={styles.messageButtonText}>Message</Text>
-          </Pressable>
-        </View>
+        onMessage ? (
+          <View style={styles.matchedAction}>
+            <Pressable style={styles.messageButton} onPress={onMessage}>
+              <Ionicons name="chatbubble-ellipses" size={22} color="#FFFFFF" />
+              <Text style={styles.messageButtonText}>Message</Text>
+            </Pressable>
+          </View>
+        ) : null
       ) : (
         <View style={styles.actionRow}>
           <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>

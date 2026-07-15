@@ -30,3 +30,23 @@ export async function getBlockBetween(userAId: string, userBId: string) {
     },
   });
 }
+
+// All user ids that are blocked-with (either direction) the given user, in a
+// single query. Use this whenever a list endpoint needs to filter many rows
+// against one user's block relationships, instead of calling hasBlockBetween
+// once per row (N+1).
+export async function getBlockedUserIds(userId: string): Promise<Set<string>> {
+  const blocks = await prisma.block.findMany({
+    where: {
+      OR: [{ blockerId: userId }, { blockedId: userId }],
+    },
+    select: { blockerId: true, blockedId: true },
+  });
+
+  const ids = new Set<string>();
+  for (const block of blocks) {
+    ids.add(block.blockerId === userId ? block.blockedId : block.blockerId);
+  }
+
+  return ids;
+}

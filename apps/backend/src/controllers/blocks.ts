@@ -69,6 +69,39 @@ export async function blockUser(req: Request, res: Response) {
       }),
     ]);
 
+    // If blocker and blocked are both currently active in the same voice
+    // room(s), close out the blocked party's participation there too, so they
+    // no longer show up as sharing a live room with the blocker.
+    //
+    // Known limitation: this only updates our own DB bookkeeping. Any LiveKit
+    // access token the blocked user already holds for that room remains
+    // valid for the rest of its TTL (createVoiceRoomToken issues 2h tokens),
+    // so their client can keep publishing/subscribing audio in that room
+    // until the token expires or they disconnect on their own. Actually
+    // evicting them in real time would need calling LiveKit's
+    // RoomServiceClient.removeParticipant(livekitRoomName, blockedId) against
+    // the LiveKit server — the livekit-server-sdk package already used here
+    // for AccessToken also exports RoomServiceClient, so no new dependency
+    // would be required — but that call isn't made here because it can't be
+    // exercised against a real LiveKit deployment in this change, and a
+    // best-effort call left untested in a safety-sensitive path is worse than
+    // being explicit about the gap.
+    const blockerActiveRooms = await prisma.voiceRoomParticipant.findMany({
+      where: { userId: blockerId, leftAt: null },
+      select: { roomId: true },
+    });
+
+    if (blockerActiveRooms.length > 0) {
+      await prisma.voiceRoomParticipant.updateMany({
+        where: {
+          userId: blockedId,
+          leftAt: null,
+          roomId: { in: blockerActiveRooms.map(p => p.roomId) },
+        },
+        data: { leftAt: new Date() },
+      });
+    }
+
     res.status(201).json(block);
   } catch {
     res.status(500).json({ error: 'Internal server error' });
