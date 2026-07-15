@@ -13,10 +13,61 @@ import {
   sendMessage,
 } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
+import { markSwiped } from '@/lib/swipedUsers';
 import { hideLikedUser, restoreLikedUser } from '@/stores/likedYou.store';
 import { registerMatchSuccess } from '@/stores/matchEvents.store';
 import { useAccessToken, useAuthUserId } from './auth';
 import { queryKeys } from './keys';
+
+type LikesListData = { likedBy: PublicUser[] };
+type LikesPreviewData = {
+  count: number;
+  preview: Array<{ userId: string; photoUrl: string; thumbnailUrl: string }>;
+};
+type LikesCachesSnapshot = {
+  previousList?: LikesListData;
+  previousPreview?: LikesPreviewData;
+};
+
+// Shared cache helpers for the "act on someone in the Likes You list" flows
+// (like and dislike). Keeping this in one place means both mutations stay in
+// lockstep instead of drifting apart as two hand-copied cache-editing paths.
+function snapshotLikesCaches(queryClient: QueryClient, userId: string): LikesCachesSnapshot {
+  return {
+    previousList: queryClient.getQueryData<LikesListData>(queryKeys.likesList(userId)),
+    previousPreview: queryClient.getQueryData<LikesPreviewData>(queryKeys.likesPreview(userId)),
+  };
+}
+
+function removeUserFromLikesCaches(queryClient: QueryClient, userId: string, targetUserId: string) {
+  queryClient.setQueryData<LikesListData>(queryKeys.likesList(userId), old => ({
+    likedBy: (old?.likedBy ?? []).filter(user => user.id !== targetUserId),
+  }));
+
+  queryClient.setQueryData<LikesPreviewData>(queryKeys.likesPreview(userId), old => {
+    if (!old) return old;
+    return {
+      count: Math.max(0, old.count - 1),
+      preview: old.preview.filter(item => item.userId !== targetUserId),
+    };
+  });
+}
+
+function restoreLikesCaches(queryClient: QueryClient, userId: string, snapshot: LikesCachesSnapshot) {
+  if (snapshot.previousList) {
+    queryClient.setQueryData(queryKeys.likesList(userId), snapshot.previousList);
+  }
+  if (snapshot.previousPreview) {
+    queryClient.setQueryData(queryKeys.likesPreview(userId), snapshot.previousPreview);
+  }
+}
+
+async function cancelLikesCacheQueries(queryClient: QueryClient, userId: string) {
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: queryKeys.likesList(userId) }),
+    queryClient.cancelQueries({ queryKey: queryKeys.likesPreview(userId) }),
+  ]);
+}
 
 const defaultMatchIntimacy: ChatMatch['intimacy'] = {
   level: 0,
@@ -89,45 +140,19 @@ export function useMatchFromLikesList() {
     onMutate: async (targetUser) => {
       if (!userId) return undefined;
 
+      markSwiped(targetUser.id);
       hideLikedUser(targetUser.id);
 
-      const likesListKey = queryKeys.likesList(userId);
-      const likesPreviewKey = queryKeys.likesPreview(userId);
+      await cancelLikesCacheQueries(queryClient, userId);
+      const snapshot = snapshotLikesCaches(queryClient, userId);
+      removeUserFromLikesCaches(queryClient, userId, targetUser.id);
 
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey: likesListKey }),
-        queryClient.cancelQueries({ queryKey: likesPreviewKey }),
-      ]);
-
-      const previousList = queryClient.getQueryData<{ likedBy: PublicUser[] }>(likesListKey);
-      const previousPreview = queryClient.getQueryData<{
-        count: number;
-        preview: Array<{ userId: string; photoUrl: string; thumbnailUrl: string }>;
-      }>(likesPreviewKey);
-
-      queryClient.setQueryData<{ likedBy: PublicUser[] }>(likesListKey, old => ({
-        likedBy: (old?.likedBy ?? []).filter(user => user.id !== targetUser.id),
-      }));
-
-      queryClient.setQueryData<typeof previousPreview>(likesPreviewKey, old => {
-        if (!old) return old;
-        return {
-          count: Math.max(0, old.count - 1),
-          preview: old.preview.filter(item => item.userId !== targetUser.id),
-        };
-      });
-
-      return { previousList, previousPreview };
+      return snapshot;
     },
-    onError: (_error, _targetUser, context) => {
-      restoreLikedUser(_targetUser.id);
+    onError: (_error, targetUser, context) => {
+      restoreLikedUser(targetUser.id);
       if (!userId || !context) return;
-      if (context.previousList) {
-        queryClient.setQueryData(queryKeys.likesList(userId), context.previousList);
-      }
-      if (context.previousPreview) {
-        queryClient.setQueryData(queryKeys.likesPreview(userId), context.previousPreview);
-      }
+      restoreLikesCaches(queryClient, userId, context);
     },
     onSuccess: ({ result, targetUser }) => {
       if (!userId) return;
@@ -205,6 +230,42 @@ export function useMatchFromLikesList() {
       queryClient.invalidateQueries({ queryKey: queryKeys.likesList(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.matches(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.chatMatches(userId) });
+    },
+  });
+}
+
+// Dismissing someone from the Likes You list. Mirrors useMatchFromLikesList's
+// optimistic-update/rollback shape via the shared cache helpers above, but
+// never results in a match, so there's no matches-cache or match-overlay work.
+export function useDislikeFromLikesList() {
+  const accessToken = useAccessToken();
+  const userId = useAuthUserId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (targetUser: PublicUser) =>
+      createSwipe(accessToken!, targetUser.id, 'DISLIKE').then(() => ({ targetUser })),
+    onMutate: async (targetUser) => {
+      if (!userId) return undefined;
+
+      markSwiped(targetUser.id);
+      hideLikedUser(targetUser.id);
+
+      await cancelLikesCacheQueries(queryClient, userId);
+      const snapshot = snapshotLikesCaches(queryClient, userId);
+      removeUserFromLikesCaches(queryClient, userId, targetUser.id);
+
+      return snapshot;
+    },
+    onError: (_error, targetUser, context) => {
+      restoreLikedUser(targetUser.id);
+      if (!userId || !context) return;
+      restoreLikesCaches(queryClient, userId, context);
+    },
+    onSuccess: () => {
+      if (!userId) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.likesPreview(userId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.likesList(userId) });
     },
   });
 }

@@ -1,6 +1,15 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
 import { colors } from '@/design/system';
 import { blockUser as blockUserApi, createSwipe, getUserById, reportUser as reportUserApi, type PublicUser } from '@/lib/api';
@@ -8,13 +17,22 @@ import { useAuth } from '@/contexts/auth';
 import { getCachedDiscoveryUser } from '@/lib/discovery-cache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { markSwiped } from '@/lib/swipedUsers';
+import { useDislikeFromLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
+import { markDiscoveryNeedsRefresh } from '@/stores/discoveryUi.store';
+import { markVoiceRoomNeedsRefresh } from '@/stores/voiceRoom.store';
 import { showToast } from '@/stores/toast.store';
+
+type ProfileDetailSource = 'discover' | 'likes' | 'matches';
+
+function resolveSource(raw: string | undefined): ProfileDetailSource {
+  return raw === 'likes' || raw === 'matches' ? raw : 'discover';
+}
 
 export default function ProfileDetailScreen() {
   const {
     userId,
     matchId,
-    source,
+    source: rawSource,
     photoUrl,
   } = useLocalSearchParams<{
     userId: string;
@@ -23,11 +41,15 @@ export default function ProfileDetailScreen() {
     name?: string;
     photoUrl?: string;
   }>();
+  const source = resolveSource(rawSource);
   const { session } = useAuth();
+  const likeFromLikesMutation = useMatchFromLikesList();
+  const dislikeFromLikesMutation = useDislikeFromLikesList();
   const [user, setUser] = useState<PublicUser | null>(() => getCachedDiscoveryUser(userId));
   const [loading, setLoading] = useState(!getCachedDiscoveryUser(userId));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liked, setLiked] = useState(false);
+  const [disliking, setDisliking] = useState(false);
   const [stamp, setStamp] = useState<'like' | 'nope' | null>(null);
   const stampOpacity = useRef(new Animated.Value(0)).current;
   const stampScale = useRef(new Animated.Value(1.4)).current;
@@ -72,9 +94,44 @@ export default function ProfileDetailScreen() {
   };
 
   const handleLike = () => {
-    if (!user || liked) return;
+    if (!user || liked || source === 'matches') return;
     setLiked(true);
+
+    if (source === 'likes') {
+      markSwiped(user.id);
+      showStamp('like', () => {
+        likeFromLikesMutation.mutate(user, {
+          onSuccess: ({ result }) => {
+            const { match } = result;
+            if (match) {
+              const primaryPhoto = user.photos.find(p => p.isPrimary) ?? user.photos[0];
+              const primaryPhotoUrl = primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '';
+              Alert.alert("It's a match! 🎉", `You and ${user.name} liked each other`, [
+                { text: 'Keep browsing', onPress: () => router.back() },
+                {
+                  text: 'Say hello',
+                  onPress: () => router.replace({
+                    pathname: '/(main)/chats/[matchId]',
+                    params: { matchId: match.id, userId: user.id, name: user.name, photoUrl: primaryPhotoUrl },
+                  }),
+                },
+              ]);
+            } else {
+              router.back();
+            }
+          },
+          onError: (err) => {
+            showToast(err instanceof Error ? err.message : 'Failed to like user.', 'error');
+            router.back();
+          },
+        });
+      });
+      return;
+    }
+
+    // source === 'discover'
     markSwiped(user.id);
+    markDiscoveryNeedsRefresh();
 
     const apiPromise = (async () => {
       if (!session?.access_token) return null;
@@ -109,8 +166,26 @@ export default function ProfileDetailScreen() {
   };
 
   const handleDislike = () => {
-    if (!user) return;
+    if (!user || disliking || source === 'matches') return;
+    setDisliking(true);
+
+    if (source === 'likes') {
+      markSwiped(user.id);
+      showStamp('nope', () => {
+        dislikeFromLikesMutation.mutate(user, {
+          onSuccess: () => router.back(),
+          onError: (err) => {
+            showToast(err instanceof Error ? err.message : 'Failed to pass on user.', 'error');
+            router.back();
+          },
+        });
+      });
+      return;
+    }
+
+    // source === 'discover'
     markSwiped(user.id);
+    markDiscoveryNeedsRefresh();
     const uid = user.id;
     if (session?.access_token) {
       createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
@@ -159,6 +234,7 @@ export default function ProfileDetailScreen() {
             try {
               await blockUserApi(token, user.id);
               markSwiped(user.id);
+              markVoiceRoomNeedsRefresh();
               showToast('User blocked', 'success');
               router.back();
             } catch (err) {
@@ -259,7 +335,7 @@ export default function ProfileDetailScreen() {
           user={user}
           onLike={handleLike}
           onDislike={handleDislike}
-          onMessage={handleMessage}
+          onMessage={matchId ? handleMessage : undefined}
           liked={liked}
           variant={source === 'matches' ? 'matched' : 'discovery'}
         />

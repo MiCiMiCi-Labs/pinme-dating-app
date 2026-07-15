@@ -21,6 +21,15 @@ export function useDiscoveryFeed(enabled = true) {
   });
 }
 
+export function useResetDiscoveryFeed() {
+  const userId = useAuthUserId();
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    if (!userId) return;
+    queryClient.resetQueries({ queryKey: queryKeys.discoveryFeed(userId) });
+  }, [userId, queryClient]);
+}
+
 export function useCreateSwipe() {
   const accessToken = useAccessToken();
   const userId = useAuthUserId();

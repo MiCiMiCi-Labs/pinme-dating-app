@@ -237,20 +237,24 @@ export function ProfileDetailContent({
       </View>
 
       {variant === 'matched' ? (
-        <View style={styles.matchedAction}>
-          <Pressable style={styles.messageButton} onPress={onMessage}>
-            <Ionicons name="chatbubble-ellipses" size={22} color="#FFFFFF" />
-            <Text style={styles.messageButtonText}>Message</Text>
-          </Pressable>
-        </View>
+        onMessage ? (
+          <View style={styles.matchedAction}>
+            <Pressable style={styles.messageButton} onPress={onMessage}>
+              <Ionicons name="chatbubble-ellipses" size={22} color="#FFFFFF" />
+              <Text style={styles.messageButtonText}>Message</Text>
+            </Pressable>
+          </View>
+        ) : null
       ) : (
         <View style={styles.actionRow}>
           <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>
             <Ionicons name="close" size={28} color={colors.orange} />
           </Pressable>
-          <Pressable style={styles.bigAction} onPress={onMessage}>
-            <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
-          </Pressable>
+          {onMessage ? (
+            <Pressable style={styles.bigAction} onPress={onMessage}>
+              <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
           <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
             <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
           </Pressable>

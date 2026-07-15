@@ -187,6 +187,16 @@ export type ReportInput = {
   description?: string;
 };
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => null);
 
@@ -197,7 +207,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
         : data && typeof data === 'object' && 'error' in data
           ? String(data.error)
         : 'Request failed';
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return data as T;

@@ -1,22 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
 import { sanitizePublicProfile } from '../lib/publicProfile';
-
-function calculateAge(birthday: Date): number {
-  const today = new Date();
-  let age = today.getFullYear() - birthday.getFullYear();
-  const monthDiff = today.getMonth() - birthday.getMonth();
-
-  if (
-    monthDiff < 0 ||
-    (monthDiff === 0 && today.getDate() < birthday.getDate())
-  ) {
-    age -= 1;
-  }
-
-  return age;
-}
 
 function calculateDistanceKm(
   from: { latitude: number; longitude: number },

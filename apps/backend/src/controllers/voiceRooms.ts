@@ -3,6 +3,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
+import { getBlockedUserIds, hasBlockBetween } from '../lib/safety';
 
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY ?? '';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET ?? '';
@@ -140,7 +141,14 @@ const roomInclude = {
   },
 };
 
-function serializeRoom(room: any) {
+// Participants who are blocked-with the viewer (either direction) must never
+// appear in what's sent back — not in the list, and not folded into
+// participantCount either, so the count always matches what's actually shown.
+function serializeRoom(room: any, blockedUserIds: Set<string> = new Set()) {
+  const visibleParticipants = room.participants.filter(
+    (participant: any) => !blockedUserIds.has(participant.userId)
+  );
+
   return {
     id: room.id,
     ownerId: room.ownerId,
@@ -151,8 +159,8 @@ function serializeRoom(room: any) {
     createdAt: room.createdAt,
     closedAt: room.closedAt,
     owner: room.owner,
-    participantCount: room.participants.length,
-    participants: room.participants.map((participant: any) => ({
+    participantCount: visibleParticipants.length,
+    participants: visibleParticipants.map((participant: any) => ({
       id: participant.id,
       userId: participant.userId,
       isMutedByHost: participant.isMutedByHost,
@@ -271,6 +279,12 @@ export async function getVoiceRoom(req: Request, res: Response) {
       return;
     }
 
+    const currentUser = await resolveDbUser(req.userId!);
+    if (!currentUser) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
     const room = await prisma.voiceRoom.findUnique({
       where: { id: roomId },
       include: roomInclude,
@@ -281,7 +295,15 @@ export async function getVoiceRoom(req: Request, res: Response) {
       return;
     }
 
-    res.json({ room: serializeRoom(room) });
+    // A block with the owner hides the room entirely — 404, not 403, so its
+    // existence isn't leaked to either side of the block.
+    if (await hasBlockBetween(currentUser.id, room.ownerId)) {
+      res.status(404).json({ error: 'Voice room not found' });
+      return;
+    }
+
+    const blockedUserIds = await getBlockedUserIds(currentUser.id);
+    res.json({ room: serializeRoom(room, blockedUserIds) });
   } catch (err) {
     console.error('[getVoiceRoom] error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -314,6 +336,27 @@ export async function joinVoiceRoom(req: Request, res: Response) {
       return;
     }
 
+    // A block with the owner hides the room the same way getVoiceRoom does.
+    if (await hasBlockBetween(user.id, room.ownerId)) {
+      res.status(404).json({ error: 'Voice room not found' });
+      return;
+    }
+
+    // Two people who've blocked each other can't share a live audio space —
+    // check every currently-active participant (roomInclude already scopes
+    // this to leftAt: null) against one batched block-id lookup rather than
+    // an hasBlockBetween call per participant. The error is intentionally
+    // generic so it doesn't reveal who, specifically, is blocked.
+    const blockedUserIds = await getBlockedUserIds(user.id);
+    const hasBlockedActiveParticipant = room.participants.some(
+      (participant) => participant.userId !== user.id && blockedUserIds.has(participant.userId)
+    );
+
+    if (hasBlockedActiveParticipant) {
+      res.status(409).json({ error: 'Voice room is unavailable' });
+      return;
+    }
+
     const participant = await prisma.voiceRoomParticipant.upsert({
       where: {
         roomId_userId: {
@@ -337,7 +380,7 @@ export async function joinVoiceRoom(req: Request, res: Response) {
     });
 
     res.json({
-      room: serializeRoom(updatedRoom),
+      room: serializeRoom(updatedRoom, blockedUserIds),
       token: await createVoiceRoomToken(room, user, !participant.isMutedByHost),
       url: LIVEKIT_URL,
       participant: {

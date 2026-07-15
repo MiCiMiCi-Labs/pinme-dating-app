@@ -1,7 +1,15 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder, SafeAreaView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Animated,
+  PanResponder,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, DiscoverySkeleton, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
 import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
 import { type DiscoveryUser } from '@/lib/api';
@@ -22,6 +30,8 @@ import {
   useDiscoveryFeed,
 } from '@/queries/discovery.queries';
 import {
+  $discoveryUi,
+  markDiscoveryRefreshHandled,
   setDiscoveryCurrentIndex,
   setDiscoveryFilterOpen,
   setDiscoveryLastSwipeAction,
@@ -53,6 +63,8 @@ export default function SwipeScreen() {
   }, [currentUserQuery.data?.user, photosQuery.data]);
   const canDiscover = Boolean(completion && completion.percent >= matchingProfileCompletionThreshold);
   const feedQuery = useDiscoveryFeed(canDiscover);
+  const resetFeed = useResetDiscoveryFeed();
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = feedQuery;
   const swipeMutation = useCreateSwipe();
   const myPhotoUrl = useMemo(() => {
     const photos = photosQuery.data ?? [];
@@ -64,6 +76,7 @@ export default function SwipeScreen() {
 
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
+  const remaining = users.length - currentIndex;
 
   useEffect(() => {
     setDiscoveryCurrentIndex(currentIndex);
@@ -72,6 +85,17 @@ export default function SwipeScreen() {
   useEffect(() => {
     setDiscoveryFilterOpen(filterOpen);
   }, [filterOpen]);
+
+  useEffect(() => {
+    const unsubscribe = $discoveryUi.subscribe((state) => {
+      if (!state.discoveryNeedsRefresh) return;
+      markDiscoveryRefreshHandled();
+      pan.setValue({ x: 0, y: 0 });
+      setCurrentIndex(prev => prev + 1);
+    });
+
+    return unsubscribe;
+  }, [pan]);
 
   useEffect(() => {
     if (!completion) return;
@@ -115,6 +139,12 @@ export default function SwipeScreen() {
     if (!primary) return;
     Image.prefetch(getDisplayPhotoUrl(primary, 'thumbnail')).catch(() => {});
   }, [users, currentIndex]);
+
+  useEffect(() => {
+    if (remaining <= 2 && hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  }, [remaining, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   const handleSwipe = useCallback(async (direction: 'like' | 'nope') => {
     const user = currentUserRef.current;
@@ -229,13 +259,17 @@ export default function SwipeScreen() {
         ) : !currentUser && feedQuery.isFetchingNextPage ? (
           <DiscoverySkeleton height={cardHeight} />
         ) : !currentUser ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>You're all caught up</Text>
-            <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
-          </View>
+          isFetchingNextPage || hasNextPage ? (
+            <DiscoverySkeleton height={cardHeight} />
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>You're all caught up</Text>
+              <Text style={styles.emptySubtext}>No more profiles for now — check back later</Text>
+            </View>
+          )
         ) : (
           <>
-            {users[currentIndex + 1] ? (
+            {users[currentIndex + 1] || isFetchingNextPage ? (
               <View style={[styles.backCard, { height: cardHeight + 10 }]} />
             ) : null}
             <DiscoverCard
