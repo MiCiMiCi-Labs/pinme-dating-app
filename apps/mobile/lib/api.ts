@@ -255,6 +255,22 @@ export async function syncAuthUser(accessToken: string, body?: SyncUserInput) {
   return parseResponse<{ message: string; user: unknown }>(response);
 }
 
+export async function registerPushToken(
+  accessToken: string,
+  body: { token: string; platform?: string }
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/notifications/register-token`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  return parseResponse<{ token: unknown }>(response);
+}
+
 // ─── User & Profile ────────────────────────────────────────────────────────
 
 export async function getCurrentAppUser(accessToken: string) {

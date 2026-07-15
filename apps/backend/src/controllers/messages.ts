@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { CHAT_MEDIA_BUCKET, VOICE_BUCKET } from '../lib/storage';
 import { calculateChatIntimacy } from '../lib/intimacy';
 import { getBlockBetween } from '../lib/safety';
+import { notifyMessageReceived } from '../lib/notifications';
 
 const sendMessageSchema = z
   .object({
@@ -69,6 +70,31 @@ function parseBefore(value: unknown): Date | null {
   if (Number.isNaN(date.getTime())) return null;
 
   return date;
+}
+
+function notifyOtherParticipant(params: {
+  match: { id: string; user1Id: string; user2Id: string };
+  senderId: string;
+  message: {
+    id: string;
+    content: string;
+    messageType: MessageType;
+  };
+}) {
+  const recipientId = params.match.user1Id === params.senderId
+    ? params.match.user2Id
+    : params.match.user1Id;
+
+  void notifyMessageReceived({
+    matchId: params.match.id,
+    senderId: params.senderId,
+    recipientId,
+    messageId: params.message.id,
+    messageType: params.message.messageType,
+    content: params.message.content,
+  }).catch(error => {
+    console.warn('[messages] push notification failed:', error);
+  });
 }
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
@@ -212,6 +238,12 @@ export async function sendMessage(req: Request, res: Response) {
       },
     });
 
+    notifyOtherParticipant({
+      match: access.match,
+      senderId: dbUserId,
+      message,
+    });
+
     res.status(201).json({ message });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
@@ -287,6 +319,12 @@ export async function uploadVoiceMessage(req: Request, res: Response) {
       },
     });
 
+    notifyOtherParticipant({
+      match: access.match,
+      senderId: dbUserId,
+      message,
+    });
+
     res.status(201).json({ message });
   } catch (err) {
     console.error('[uploadVoiceMessage] error:', err);
@@ -346,6 +384,12 @@ export async function uploadImageMessage(req: Request, res: Response) {
     const message = await prisma.message.create({
       data: { id: messageId, matchId, senderId: dbUserId, content: publicUrl, messageType: MessageType.IMAGE, replyToId: replyResult.id },
       include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude, reactions: reactionsInclude },
+    });
+
+    notifyOtherParticipant({
+      match: access.match,
+      senderId: dbUserId,
+      message,
     });
 
     res.status(201).json({ message });
@@ -416,6 +460,12 @@ export async function uploadVideoMessage(req: Request, res: Response) {
         replyToId: replyResult.id,
       },
       include: { sender: { select: { id: true, name: true } }, replyTo: replyToInclude, reactions: reactionsInclude },
+    });
+
+    notifyOtherParticipant({
+      match: access.match,
+      senderId: dbUserId,
+      message,
     });
 
     res.status(201).json({ message });

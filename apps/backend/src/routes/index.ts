@@ -19,6 +19,7 @@ import callsRouter from './calls';
 import voiceRoomsRouter from './voiceRooms';
 import likesRouter from './likes';
 import subscriptionsRouter from './subscriptions';
+import notificationsRouter from './notifications';
 
 export const router = Router();
 
@@ -42,3 +43,4 @@ router.use('/calls', callsRouter);
 router.use('/voice-rooms', voiceRoomsRouter);
 router.use('/likes', likesRouter);
 router.use('/subscription', subscriptionsRouter);
+router.use('/notifications', notificationsRouter);

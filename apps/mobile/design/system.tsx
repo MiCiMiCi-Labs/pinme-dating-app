@@ -143,6 +143,97 @@ export function IconButton({
   );
 }
 
+export function TextButton({
+  children,
+  onPress,
+  color = colors.primary,
+  style,
+}: {
+  children: ReactNode;
+  onPress?: () => void;
+  color?: string;
+  style?: StyleProp<TextStyle>;
+}) {
+  return (
+    <Pressable onPress={onPress} hitSlop={8}>
+      <Text style={[styles.textButton, { color }, style]}>{children}</Text>
+    </Pressable>
+  );
+}
+
+export function SocialIconButton({
+  icon,
+  onPress,
+  style,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress?: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <Pressable onPress={onPress} style={[styles.socialIconButton, style]}>
+      <Ionicons name={icon} size={24} color={colors.text} />
+    </Pressable>
+  );
+}
+
+export function RoundActionButton({
+  icon,
+  onPress,
+  color = colors.primary,
+  filled = false,
+  active = false,
+  size = 76,
+  iconSize = 32,
+  style,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress?: () => void;
+  color?: string;
+  filled?: boolean;
+  active?: boolean;
+  size?: number;
+  iconSize?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const isFilled = filled || active;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.roundActionButton,
+        { width: size, height: size, borderRadius: size / 2 },
+        isFilled && { backgroundColor: color },
+        style,
+      ]}
+    >
+      <Ionicons name={icon} size={iconSize} color={isFilled ? '#FFFFFF' : color} />
+    </Pressable>
+  );
+}
+
+export function PillActionButton({
+  label,
+  icon,
+  onPress,
+  color = colors.primary,
+  style,
+}: {
+  label: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  onPress?: () => void;
+  color?: string;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <Pressable onPress={onPress} style={[styles.pillActionButton, { backgroundColor: color }, style]}>
+      {icon ? <Ionicons name={icon} size={22} color="#FFFFFF" /> : null}
+      <Text style={styles.pillActionText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 export function ScreenTitle({
   title,
   subtitle,
@@ -277,6 +368,49 @@ const styles = StyleSheet.create({
   },
   buttonTextAccent: {
     color: colors.primary,
+  },
+  textButton: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  socialIconButton: {
+    flex: 1,
+    height: 58,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg,
+  },
+  roundActionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg,
+    shadowColor: '#E5B9C0',
+    shadowOpacity: 0.25,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 5,
+  },
+  pillActionButton: {
+    minHeight: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 24,
+    shadowColor: '#E5B9C0',
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 4,
+  },
+  pillActionText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
   },
   headerRow: {
     minHeight: 58,

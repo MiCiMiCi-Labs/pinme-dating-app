@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, IconButton } from '@/design/system';
+import { colors, IconButton, PillActionButton, RoundActionButton } from '@/design/system';
 import { type Photo, type PublicUser } from '@/lib/api';
 
 export function PhotoCarousel({
@@ -239,25 +239,16 @@ export function ProfileDetailContent({
       {variant === 'matched' ? (
         onMessage ? (
           <View style={styles.matchedAction}>
-            <Pressable style={styles.messageButton} onPress={onMessage}>
-              <Ionicons name="chatbubble-ellipses" size={22} color="#FFFFFF" />
-              <Text style={styles.messageButtonText}>Message</Text>
-            </Pressable>
+            <PillActionButton label="Message" icon="chatbubble-ellipses" onPress={onMessage} />
           </View>
         ) : null
       ) : (
         <View style={styles.actionRow}>
-          <Pressable style={styles.smallAction} onPress={onDislike ?? (() => router.back())}>
-            <Ionicons name="close" size={28} color={colors.orange} />
-          </Pressable>
+          <RoundActionButton icon="close" color={colors.orange} onPress={onDislike ?? (() => router.back())} />
           {onMessage ? (
-            <Pressable style={styles.bigAction} onPress={onMessage}>
-              <Ionicons name="chatbubble-ellipses" size={36} color="#FFFFFF" />
-            </Pressable>
+            <RoundActionButton icon="chatbubble-ellipses" filled size={94} iconSize={36} onPress={onMessage} />
           ) : null}
-          <Pressable style={[styles.smallAction, liked && styles.smallActionActive]} onPress={onLike}>
-            <Ionicons name="heart" size={28} color={liked ? '#FFFFFF' : colors.primary} />
-          </Pressable>
+          <RoundActionButton icon="heart" active={liked} iconSize={28} onPress={onLike} />
         </View>
       )}
     </>

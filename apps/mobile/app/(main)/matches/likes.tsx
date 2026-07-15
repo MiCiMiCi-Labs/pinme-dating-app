@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, MatchOverlay } from '@/components/discover';
-import { colors, IconButton } from '@/design/system';
+import { colors, IconButton, PillActionButton, RoundActionButton } from '@/design/system';
 import { type DiscoveryUser, type PublicUser } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useDislikeFromLikesList, useLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
@@ -201,13 +201,8 @@ export default function LikesYouScreen() {
               />
             </View>
             <View style={styles.likedActions}>
-              <Pressable style={styles.passButton} onPress={() => animateSwipe('nope')}>
-                <Ionicons name="close" size={32} color={colors.orange} />
-              </Pressable>
-              <Pressable style={styles.matchButtonLarge} onPress={() => animateSwipe('like')}>
-                <Ionicons name="heart" size={34} color="#FFFFFF" />
-                <Text style={styles.matchButtonLargeText}>Match</Text>
-              </Pressable>
+              <RoundActionButton icon="close" color={colors.orange} onPress={() => animateSwipe('nope')} />
+              <PillActionButton label="Match" icon="heart" onPress={() => animateSwipe('like')} style={styles.matchActionButton} />
             </View>
             <Text style={styles.deckHint}>Swipe right to match, left to pass.</Text>
           </>
@@ -316,36 +311,9 @@ const styles = StyleSheet.create({
     gap: 18,
     marginTop: 12,
   },
-  passButton: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  matchButtonLarge: {
+  matchActionButton: {
     minWidth: 158,
     height: 68,
-    borderRadius: 34,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    shadowColor: colors.primary,
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-  },
-  matchButtonLargeText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '900',
   },
   emptyState: {
     flex: 1,

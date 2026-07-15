@@ -52,6 +52,7 @@
           "cameraPermission": "Allow PinMe to take photos."
         }
       ],
+      "expo-notifications",
       "expo-font"
     ],
     "scheme": "pinme",
