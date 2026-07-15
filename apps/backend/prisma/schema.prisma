@@ -99,6 +99,7 @@ model Photo {
   createdAt    DateTime  @default(now()) @map("created_at")
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, isPrimary, orderIndex, createdAt])
   @@map("photos")
 }
 
@@ -139,6 +140,7 @@ model Swipe {
 
   @@unique([swiperId, targetId])
   @@index([targetId])
+  @@index([targetId, action, createdAt])
   @@map("swipes")
 }
 
@@ -153,6 +155,9 @@ model Match {
   messages    Message[]
 
   @@unique([user1Id, user2Id])
+  @@index([user1Id, unmatchedAt, createdAt])
+  @@index([user2Id, user1Id])
+  @@index([user2Id, unmatchedAt, createdAt])
   @@map("matches")
 }
 
@@ -174,6 +179,7 @@ model Message {
   reactions   MessageReaction[]
 
   @@index([matchId, createdAt])
+  @@index([matchId, isRead, senderId])
   @@map("messages")
 }
 
@@ -199,6 +205,7 @@ model Block {
   blocker   User     @relation("BlockerBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
 
   @@unique([blockerId, blockedId])
+  @@index([blockedId, blockerId])
   @@map("blocks")
 }
 

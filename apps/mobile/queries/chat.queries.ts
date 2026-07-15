@@ -1,12 +1,14 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
   createSwipe,
   getChatMatches,
   getLikesList,
   getLikesPreview,
+  getMatches,
   getMessages,
   type ChatMatch,
   type ChatMessage,
+  type MatchSummary,
   type PublicUser,
   sendMessage,
 } from '@/lib/api';
@@ -76,6 +78,20 @@ const defaultMatchIntimacy: ChatMatch['intimacy'] = {
   currentStreakDays: 0,
 };
 
+export const CHAT_PAGE_SIZE = 30;
+
+export function useMatches() {
+  const accessToken = useAccessToken();
+  const userId = useAuthUserId();
+
+  return useQuery({
+    queryKey: userId ? queryKeys.matches(userId) : ['matches', 'anonymous', 'list'],
+    queryFn: () => getMatches(accessToken!),
+    enabled: Boolean(accessToken && userId),
+    staleTime: 60_000,
+  });
+}
+
 export function useChatMatches() {
   const accessToken = useAccessToken();
   const userId = useAuthUserId();
@@ -84,7 +100,7 @@ export function useChatMatches() {
     queryKey: userId ? queryKeys.chatMatches(userId) : ['chat', 'anonymous', 'matches'],
     queryFn: () => getChatMatches(accessToken!),
     enabled: Boolean(accessToken && userId),
-    staleTime: 30_000,
+    staleTime: 60_000,
   });
 }
 
@@ -96,7 +112,7 @@ export function useLikesPreview() {
     queryKey: userId ? queryKeys.likesPreview(userId) : ['likes', 'anonymous', 'preview'],
     queryFn: () => getLikesPreview(accessToken!),
     enabled: Boolean(accessToken && userId),
-    staleTime: 60_000,
+    staleTime: 2 * 60_000,
   });
 }
 
@@ -179,6 +195,28 @@ export function useMatchFromLikesList() {
                 gender: targetUser.gender,
                 bio: targetUser.bio,
                 city: targetUser.city,
+                photos: targetUser.photos,
+              },
+            },
+            ...previous,
+          ];
+        });
+
+        queryClient.setQueryData<MatchSummary[]>(queryKeys.matches(userId), old => {
+          const previous = old ?? [];
+          if (previous.some(item => item.matchId === match.id)) return previous;
+
+          return [
+            {
+              matchId: match.id,
+              createdAt: match.createdAt ?? new Date().toISOString(),
+              user: {
+                id: targetUser.id,
+                name: targetUser.name,
+                age: targetUser.age,
+                gender: targetUser.gender,
+                bio: targetUser.bio,
+                city: targetUser.city,
                 profile: targetUser.profile,
                 photos: targetUser.photos,
               },
@@ -190,6 +228,7 @@ export function useMatchFromLikesList() {
 
       queryClient.invalidateQueries({ queryKey: queryKeys.likesPreview(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.likesList(userId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.matches(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.chatMatches(userId) });
     },
   });
@@ -235,12 +274,18 @@ export function useMessages(matchId: string | null | undefined) {
   const accessToken = useAccessToken();
   const userId = useAuthUserId();
 
-  return useQuery({
+  return useInfiniteQuery({
     queryKey:
       userId && matchId
         ? queryKeys.messages(userId, matchId)
         : ['chat', userId ?? 'anonymous', 'messages', 'missing'],
-    queryFn: () => getMessages(accessToken!, matchId!),
+    queryFn: ({ pageParam }) =>
+      getMessages(accessToken!, matchId!, {
+        limit: CHAT_PAGE_SIZE,
+        before: pageParam,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: Boolean(accessToken && userId && matchId),
     staleTime: 10_000,
   });

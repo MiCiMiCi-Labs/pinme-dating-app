@@ -30,20 +30,40 @@ function getOwnerPhoto(room: VoiceRoom) {
 }
 
 export default function VoiceRoomsScreen() {
-  const [rooms, setRooms] = useState<VoiceRoom[]>([]);
+const [rooms, setRooms] = useState<VoiceRoom[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [query, setQuery] = useState('');
+  const [activeTag, setActiveTag] = useState<string | null>(null);
   const [roomName, setRoomName] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
 
-  const loadRooms = useCallback(async (showSpinner = true, search = query) => {
-    if (showSpinner && !hasLoadedRef.current) setLoading(true);
+  const loadRooms = useCallback(async ({
+    showSpinner = true,
+    search = query,
+    tag = activeTag,
+    cursor = null,
+    append = false,
+  }: {
+    showSpinner?: boolean;
+    search?: string;
+    tag?: string | null;
+    cursor?: string | null;
+    append?: boolean;
+  } = {}) => {
+    if (append) {
+      setLoadingMore(true);
+    } else if (showSpinner && !hasLoadedRef.current) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -53,11 +73,24 @@ export default function VoiceRoomsScreen() {
         return;
       }
 
-      const [{ rooms: loadedRooms }, tagsResponse] = await Promise.all([
-        getVoiceRooms(session.access_token, search),
+      const [roomsResponse, tagsResponse] = await Promise.all([
+        getVoiceRooms(session.access_token, {
+          search,
+          tag,
+          cursor,
+          limit: 20,
+        }),
         tags.length ? Promise.resolve({ tags }) : getVoiceRoomTags(session.access_token),
       ]);
-      setRooms(loadedRooms);
+      setRooms(current => {
+        if (!append) return roomsResponse.rooms;
+
+        const roomMap = new Map(current.map(room => [room.id, room]));
+        roomsResponse.rooms.forEach(room => roomMap.set(room.id, room));
+        return Array.from(roomMap.values());
+      });
+      setNextCursor(roomsResponse.nextCursor);
+      setHasMore(roomsResponse.hasMore);
       setTags(tagsResponse.tags);
       hasLoadedRef.current = true;
     } catch (err) {
@@ -66,19 +99,30 @@ export default function VoiceRoomsScreen() {
       hasLoadedRef.current = true;
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
-  }, [query, tags]);
+  }, [activeTag, query, tags]);
 
   useFocusEffect(
     useCallback(() => {
-      loadRooms(!hasLoadedRef.current);
+      loadRooms({ showSpinner: !hasLoadedRef.current });
     }, [loadRooms])
   );
 
   useEffect(() => {
+    if (!hasLoadedRef.current) return;
+
+    const timer = setTimeout(() => {
+      loadRooms({ showSpinner: false, search: query, tag: activeTag });
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [activeTag, loadRooms, query]);
+
+  useEffect(() => {
     const unsubscribe = $voiceRoom.subscribe((voiceRoom) => {
       if (!voiceRoom.voiceRoomNeedsRefresh) return;
-      loadRooms(false);
+      loadRooms({ showSpinner: false });
       markVoiceRoomRefreshHandled();
     });
 
@@ -124,17 +168,38 @@ export default function VoiceRoomsScreen() {
 
   const roomRows = useMemo(() => rooms, [rooms]);
 
+  const loadMoreRooms = () => {
+    if (!hasMore || !nextCursor || loadingMore || loading) return;
+    loadRooms({
+      showSpinner: false,
+      search: query,
+      tag: activeTag,
+      cursor: nextCursor,
+      append: true,
+    });
+  };
+
+  const handleRoomsScroll = (event: any) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    if (distanceFromBottom < 260) {
+      loadMoreRooms();
+    }
+  };
+
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        onScroll={handleRoomsScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => {
               setRefreshing(true);
-              loadRooms(false);
+              loadRooms({ showSpinner: false });
             }}
           />
         }
@@ -152,16 +217,47 @@ export default function VoiceRoomsScreen() {
           <TextInput
             value={query}
             onChangeText={setQuery}
-            onSubmitEditing={() => loadRooms(false, query)}
+            onSubmitEditing={() => loadRooms({ showSpinner: false, search: query, tag: activeTag })}
             placeholder="Search by room name or ID"
             placeholderTextColor={colors.grayIcon}
             style={styles.searchInput}
             returnKeyType="search"
           />
-          <Pressable onPress={() => loadRooms(false, query)} hitSlop={8}>
+          <Pressable onPress={() => loadRooms({ showSpinner: false, search: query, tag: activeTag })} hitSlop={8}>
             <Ionicons name="arrow-forward-circle" size={24} color={colors.primary} />
           </Pressable>
         </View>
+
+        {tags.length ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filterTags}
+          >
+            <Pressable
+              style={[styles.filterTag, activeTag === null && styles.filterTagActive]}
+              onPress={() => setActiveTag(null)}
+            >
+              <Text style={[styles.filterTagText, activeTag === null && styles.filterTagTextActive]}>
+                All
+              </Text>
+            </Pressable>
+            {tags.map(tag => {
+              const selected = activeTag === tag;
+              return (
+                <Pressable
+                  key={tag}
+                  style={[styles.filterTag, selected && styles.filterTagActive]}
+                  onPress={() => setActiveTag(selected ? null : tag)}
+                >
+                  <Text style={[styles.filterTagText, selected && styles.filterTagTextActive]}>
+                    {tag}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -197,6 +293,13 @@ export default function VoiceRoomsScreen() {
             <Text style={styles.emptyCopy}>Create a room and invite people to talk.</Text>
           </View>
         )}
+
+        {loadingMore ? (
+          <View style={styles.loadingMore}>
+            <ActivityIndicator color={colors.primary} size="small" />
+            <Text style={styles.loadingMoreText}>Loading more rooms...</Text>
+          </View>
+        ) : null}
       </ScrollView>
 
       <Modal visible={createOpen} animationType="slide" transparent onRequestClose={() => setCreateOpen(false)}>
@@ -291,6 +394,33 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
   },
+  filterTags: {
+    gap: 8,
+    paddingTop: 14,
+    paddingRight: 8,
+  },
+  filterTag: {
+    minHeight: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterTagActive: {
+    borderColor: colors.primary,
+    backgroundColor: '#FFF0F3',
+  },
+  filterTagText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  filterTagTextActive: {
+    color: colors.primary,
+  },
   errorText: {
     color: colors.primary,
     fontSize: 13,
@@ -316,6 +446,18 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 12,
     marginTop: 22,
+  },
+  loadingMore: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 18,
+  },
+  loadingMoreText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
   },
   roomCard: {
     width: '48%',

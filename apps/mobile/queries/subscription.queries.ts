@@ -11,7 +11,7 @@ export function useMySubscription() {
     queryKey: userId ? queryKeys.subscription(userId) : ['subscription', 'anonymous', 'me'],
     queryFn: () => getMySubscription(accessToken!),
     enabled: Boolean(accessToken && userId),
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
   });
 }
 

@@ -53,13 +53,22 @@ function parseDurationSec(raw: unknown): number | null {
 }
 
 function parseLimit(value: unknown): number {
-  const limit = Number(value ?? 50);
+  const limit = Number(value ?? 30);
 
   if (!Number.isInteger(limit)) {
-    return 50;
+    return 30;
   }
 
   return Math.min(Math.max(limit, 1), 100);
+}
+
+function parseBefore(value: unknown): Date | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date;
 }
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
@@ -102,7 +111,7 @@ export async function getMessages(req: Request, res: Response) {
   try {
     const matchId = req.params.matchId as string;
     const limit = parseLimit(req.query.limit);
-    const before = typeof req.query.before === 'string' ? req.query.before : null;
+    const before = parseBefore(req.query.before);
 
     const dbUserId = await resolveDbUserId(req.userId!);
     if (!dbUserId) {
@@ -119,7 +128,7 @@ export async function getMessages(req: Request, res: Response) {
     const messages = await prisma.message.findMany({
       where: {
         matchId,
-        ...(before ? { createdAt: { lt: new Date(before) } } : {}),
+        ...(before ? { createdAt: { lt: before } } : {}),
       },
       include: {
         sender: { select: { id: true, name: true } },
@@ -127,18 +136,25 @@ export async function getMessages(req: Request, res: Response) {
         reactions: reactionsInclude,
       },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: limit + 1,
     });
-    const orderedMessages = messages.reverse();
+    const hasMore = messages.length > limit;
+    const pageMessages = messages.slice(0, limit);
+    const orderedMessages = pageMessages.reverse();
     const intimacy = calculateChatIntimacy(
       orderedMessages,
       access.match.user1Id,
       access.match.user2Id
     );
+    const nextCursor = hasMore && orderedMessages.length > 0
+      ? orderedMessages[0].createdAt.toISOString()
+      : null;
 
     res.json({
       messages: orderedMessages,
       intimacy,
+      nextCursor,
+      hasMore,
     });
   } catch {
     res.status(500).json({ error: 'Internal server error' });

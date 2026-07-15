@@ -52,8 +52,43 @@ const muteParticipantSchema = z
   })
   .strict();
 
-function firstParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
+function firstParam(value: unknown) {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
+
+function parseLimit(value: unknown): number {
+  const limit = Number(value ?? 20);
+
+  if (!Number.isInteger(limit)) {
+    return 20;
+  }
+
+  return Math.min(Math.max(limit, 1), 50);
+}
+
+function parseCursor(value: unknown): Date | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date;
+}
+
+function parseSearch(query: Request['query']) {
+  const value = firstParam(query.query) ?? firstParam(query.search);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseTags(query: Request['query']) {
+  const raw = firstParam(query.tags) ?? firstParam(query.tag);
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+
+  return raw
+    .split(',')
+    .map(tag => tag.trim())
+    .filter(tag => allowedTags.has(tag));
 }
 
 async function resolveDbUser(supabaseAuthId: string) {
@@ -165,7 +200,10 @@ export async function listVoiceRooms(req: Request, res: Response) {
       return;
     }
 
-    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const limit = parseLimit(req.query.limit);
+    const cursor = parseCursor(req.query.cursor);
+    const search = parseSearch(req.query);
+    const tags = parseTags(req.query);
     // One batched query for all of the viewer's block relationships, reused
     // both to exclude blocked owners' rooms and to filter each room's
     // participant list below — avoids an hasBlockBetween call per row.
@@ -175,6 +213,8 @@ export async function listVoiceRooms(req: Request, res: Response) {
       where: {
         isOpen: true,
         ...(blockedUserIds.size > 0 ? { ownerId: { notIn: Array.from(blockedUserIds) } } : {}),
+        ...(cursor ? { createdAt: { lt: cursor } } : {}),
+        ...(tags.length ? { tags: { hasSome: tags } } : {}),
         ...(search
           ? {
               OR: [
@@ -186,10 +226,18 @@ export async function listVoiceRooms(req: Request, res: Response) {
       },
       include: roomInclude,
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: limit + 1,
     });
 
-    res.json({ rooms: rooms.map(room => serializeRoom(room, blockedUserIds)) });
+    const hasMore = rooms.length > limit;
+    const pageRooms = rooms.slice(0, limit);
+    const lastRoom = pageRooms[pageRooms.length - 1];
+
+    res.json({
+      rooms: pageRooms.map(room => serializeRoom(room, blockedUserIds)),
+      nextCursor: hasMore && lastRoom ? lastRoom.createdAt.toISOString() : null,
+      hasMore,
+    });
   } catch (err) {
     console.error('[listVoiceRooms] error:', err);
     res.status(500).json({ error: 'Internal server error' });

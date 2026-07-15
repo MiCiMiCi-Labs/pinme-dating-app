@@ -4,7 +4,9 @@ import { createSwipe, getDiscoveryFeed, type SwipeAction } from '@/lib/api';
 import { useAccessToken, useAuthUserId } from './auth';
 import { queryKeys } from './keys';
 
-const DISCOVERY_PAGE_SIZE = 5;
+export const DISCOVERY_PAGE_SIZE = 10;
+export const DISCOVERY_PREFETCH_THRESHOLD = 3;
+export const DISCOVERY_MAX_BUFFER = 30;
 
 export function useDiscoveryFeed(enabled = true) {
   const accessToken = useAccessToken();
@@ -12,10 +14,9 @@ export function useDiscoveryFeed(enabled = true) {
 
   return useInfiniteQuery({
     queryKey: userId ? queryKeys.discoveryFeed(userId) : ['discovery', 'anonymous', 'feed'],
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-      getDiscoveryFeed(accessToken!, { limit: DISCOVERY_PAGE_SIZE, cursor: pageParam }),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    queryFn: ({ pageParam }) => getDiscoveryFeed(accessToken!, DISCOVERY_PAGE_SIZE, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: Boolean(accessToken && userId && enabled),
     staleTime: 30_000,
   });
@@ -40,6 +41,7 @@ export function useCreateSwipe() {
       createSwipe(accessToken!, targetId, action),
     onSuccess: () => {
       if (!userId) return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.matches(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.chatMatches(userId) });
     },
   });
