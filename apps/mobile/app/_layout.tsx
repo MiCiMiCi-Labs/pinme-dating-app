@@ -5,7 +5,9 @@ import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { Animated, Easing, LogBox, StyleSheet, Text, View } from 'react-native';
 import { GlobalToastHost } from '@/components/global-toast';
+import { GlobalCallHost } from '@/components/global-call-host';
 import { AuthProvider, useAuth } from '@/contexts/auth';
+import { CallProvider } from '@/contexts/call';
 import { colors } from '@/design/system';
 import { resetChatEvents } from '@/stores/chatEvents.store';
 import { resetDiscoveryUi } from '@/stores/discoveryUi.store';
@@ -147,7 +149,10 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <AuthCacheBoundary />
-        <RootNavigator />
+        <CallProvider>
+          <RootNavigator />
+          <GlobalCallHost />
+        </CallProvider>
         <GlobalToastHost />
       </AuthProvider>
     </QueryClientProvider>

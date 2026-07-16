@@ -3,7 +3,7 @@ import { Audio, ResizeMode, Video } from 'expo-av';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -27,7 +27,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, IconButton, photos, ProfileThumb } from '@/design/system';
 import {
   blockUser as blockUserApi,
-  getCallToken,
   reportUser as reportUserApi,
   markMessagesRead,
   recallMessage,
@@ -44,11 +43,9 @@ import {
   type ReplyPreview,
   getReplySuggestions,
 } from '@/lib/api';
-const VoiceCallModal = lazy(() =>
-  import('@/components/voice-call-modal').then(m => ({ default: m.VoiceCallModal }))
-);
+import { useCall } from '@/contexts/call';
+import { useCallPreference, useCreateCallInvitation, useUpdateCallPreference } from '@/queries/call.queries';
 import { supabase } from '@/lib/supabase';
-import Constants from 'expo-constants';
 import { STICKERS } from '@/lib/stickers';
 import { readCachedThread, writeCachedThread } from '@/lib/chatMessageCache';
 import { useAccessToken, useAuthUserId } from '@/queries/auth';
@@ -283,7 +280,7 @@ export default function ChatRoomScreen() {
   const [imageViewer, setImageViewer] = useState<string | null>(null);
   const [videoPlayer, setVideoPlayer] = useState<string | null>(null);
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
-  const [callSession, setCallSession] = useState<{ url: string; token: string; roomName: string } | null>(null);
+  const [dismissedInvitations, setDismissedInvitations] = useState<Set<string>>(new Set());
   const accessToken = useAccessToken();
   const authUserId = useAuthUserId();
   const { data: currentUserData, refetch: refetchCurrentUser } = useCurrentUser();
@@ -294,6 +291,10 @@ export default function ChatRoomScreen() {
     isFetchingNextPage,
   } = useMessages(matchId);
   const { data: chatMatches } = useChatMatches();
+  const { startCall: startGlobalCall } = useCall();
+  const { data: callPreference } = useCallPreference(matchId);
+  const updateCallPreference = useUpdateCallPreference(matchId);
+  const createCallInvitation = useCreateCallInvitation(matchId);
   const matchedUserId = routeUserId ?? (Array.isArray(chatMatches)
     ? chatMatches.find(match => match.matchId === matchId)?.user.id
     : undefined);
@@ -1028,20 +1029,63 @@ export default function ChatRoomScreen() {
     }
   };
 
-  const handleStartCall = async () => {
+  // Call button behavior per docs/private-voice-calling-spec.md "聊天页交互状态":
+  // state D (mutually enabled) dials out immediately; states A/B show the
+  // mutual-consent prompts instead of ever dialing directly.
+  const handleStartCall = () => {
     if (!matchId) return;
-    if (Constants.executionEnvironment === 'storeClient') {
-      setError('Voice calls are not available in Expo Go. Use a dev build to test this feature.');
+
+    if (callPreference?.mutuallyEnabled) {
+      startGlobalCall(matchId);
       return;
     }
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) return;
-      const result = await getCallToken(session.access_token, matchId);
-      setCallSession(result);
-    } catch {
-      setError('Could not start voice call. Please try again.');
+
+    if (!callPreference?.mineEnabled) {
+      Alert.alert(
+        'Enable voice chat?',
+        'Only starts once you both agree. You can turn it off anytime.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Invite to voice chat',
+            onPress: () => {
+              createCallInvitation.mutate(undefined, {
+                onError: (err) => {
+                  showToast(err instanceof Error ? err.message : 'Could not send invitation', 'error');
+                },
+              });
+            },
+          },
+        ]
+      );
+      return;
     }
+
+    Alert.alert('Waiting for a response', `Waiting for ${name} to agree to voice chat.`, [{ text: 'OK' }]);
+  };
+
+  const handleToggleCallPreference = () => {
+    const nextEnabled = !callPreference?.mineEnabled;
+    Alert.alert(
+      nextEnabled ? 'Enable voice chat?' : 'Turn off voice chat?',
+      nextEnabled
+        ? 'Only starts once you both agree. You can turn it off anytime.'
+        : `You won't be able to call ${name} until you turn this back on.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: nextEnabled ? 'Enable' : 'Turn off',
+          style: nextEnabled ? 'default' : 'destructive',
+          onPress: () => {
+            updateCallPreference.mutate(nextEnabled, {
+              onError: (err) => {
+                showToast(err instanceof Error ? err.message : 'Could not update voice chat setting', 'error');
+              },
+            });
+          },
+        },
+      ]
+    );
   };
 
   const getTokenOrToast = () => {
@@ -1208,9 +1252,51 @@ export default function ChatRoomScreen() {
             {messages.length ? (
               messages.map(message => {
                 if (message.messageType === 'SYSTEM') {
+                  // State C: "{partner} invited you to enable voice chat." is
+                  // actionable for the recipient only — the inviter sees the
+                  // same shared transcript line with no buttons (they already
+                  // did the inviting; docs/private-voice-calling-spec.md
+                  // "聊天页交互状态").
+                  const isVoiceInvitation =
+                    message.content === `${name} invited you to enable voice chat.`;
+                  const isActionable =
+                    isVoiceInvitation &&
+                    !callPreference?.mineEnabled &&
+                    !dismissedInvitations.has(message.id);
+
                   return (
-                    <View key={message.id} style={styles.systemMessage}>
+                    <View
+                      key={message.id}
+                      style={[styles.systemMessage, isActionable && styles.systemMessageCard]}
+                    >
                       <Text style={styles.systemMessageText}>{message.content}</Text>
+                      {isActionable && (
+                        <View style={styles.invitationActions}>
+                          <Pressable
+                            style={styles.invitationDismiss}
+                            onPress={() =>
+                              setDismissedInvitations(current => new Set(current).add(message.id))
+                            }
+                          >
+                            <Text style={styles.invitationDismissText}>Not now</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.invitationAllow}
+                            onPress={() =>
+                              updateCallPreference.mutate(true, {
+                                onError: err => {
+                                  showToast(
+                                    err instanceof Error ? err.message : 'Could not enable voice chat',
+                                    'error'
+                                  );
+                                },
+                              })
+                            }
+                          >
+                            <Text style={styles.invitationAllowText}>Allow voice calls</Text>
+                          </Pressable>
+                        </View>
+                      )}
                     </View>
                   );
                 }
@@ -1317,6 +1403,19 @@ export default function ChatRoomScreen() {
             }}>
               <Ionicons name="call-outline" size={22} color={colors.primary} />
               <Text style={styles.actionLabel}>Call</Text>
+            </Pressable>
+            <Pressable style={styles.actionTile} onPress={() => {
+              setActionsOpen(false);
+              handleToggleCallPreference();
+            }}>
+              <Ionicons
+                name={callPreference?.mineEnabled ? 'volume-high-outline' : 'volume-mute-outline'}
+                size={22}
+                color={colors.primary}
+              />
+              <Text style={styles.actionLabel}>
+                {callPreference?.mineEnabled ? 'Voice: On' : 'Voice: Off'}
+              </Text>
             </Pressable>
             <Pressable style={styles.actionTile} onPress={() => {
               setActionsOpen(false);
@@ -1618,25 +1717,6 @@ export default function ChatRoomScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-      {callSession && (
-        <Suspense fallback={null}>
-          <VoiceCallModal
-            serverUrl={callSession.url}
-            token={callSession.token}
-            partnerName={name}
-            partnerAvatar={photoUrl}
-            onEnd={() => setCallSession(null)}
-            onCallEnded={(duration) => {
-              const mins = Math.floor(duration / 60);
-              const secs = duration % 60;
-              const label = duration > 0
-                ? ` · ${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-                : '';
-              setError(`📞 Voice call ended${label}`);
-            }}
-          />
-        </Suspense>
-      )}
     </SafeAreaView>
   );
 }
@@ -1779,6 +1859,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     textAlign: 'center',
+  },
+  systemMessageCard: {
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  invitationActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+  invitationDismiss: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  invitationDismissText: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  invitationAllow: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+  },
+  invitationAllowText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
   },
   messageBlock: {
     alignSelf: 'flex-start',

@@ -797,12 +797,163 @@ export async function redeemPromoCode(accessToken: string, code: string) {
   return parseResponse<{ message: string; subscription: Subscription }>(response);
 }
 
-export async function getCallToken(accessToken: string, matchId: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${matchId}/token`, {
+// --- Private 1:1 voice calling (docs/private-voice-calling-spec.md) ---------
+
+export type CallPreferenceState = {
+  mineEnabled: boolean;
+  theirsEnabled: boolean;
+  mutuallyEnabled: boolean;
+};
+
+export type CallParticipant = {
+  id: string;
+  name: string;
+  photoUrl: string | null;
+};
+
+export type CallType = 'AUDIO' | 'VIDEO';
+export type CallStatus = 'RINGING' | 'ACCEPTED' | 'DECLINED' | 'CANCELED' | 'MISSED' | 'ENDED' | 'FAILED';
+
+export type CallSummary = {
+  id: string;
+  matchId: string;
+  type: CallType;
+  status: CallStatus;
+  roomName: string;
+  expiresAt: string;
+  answeredAt: string | null;
+  endedAt: string | null;
+  durationSec: number | null;
+  failureReason: string | null;
+  createdAt: string;
+  caller: CallParticipant;
+  callee: CallParticipant;
+};
+
+export type LiveKitCredentials = {
+  url: string;
+  token: string;
+  roomName: string;
+};
+
+export async function getCallPreference(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}/call-preference`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<CallPreferenceState>(response);
+}
+
+export async function updateCallPreference(accessToken: string, matchId: string, audioEnabled: boolean) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}/call-preference`, {
+    method: 'PUT',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ audioEnabled }),
+  });
+  return parseResponse<CallPreferenceState>(response);
+}
+
+export async function createCallInvitation(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}/call-invitation`, {
     method: 'POST',
     headers: authHeaders(accessToken),
   });
-  return parseResponse<{ url: string; token: string; roomName: string }>(response);
+  return parseResponse<CallPreferenceState & { message: ChatMessage }>(response);
+}
+
+export async function startCall(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${matchId}/start`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ type: 'AUDIO' }),
+  });
+  return parseResponse<CallSummary>(response);
+}
+
+export async function getIncomingCalls(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/incoming`, {
+    headers: authHeaders(accessToken),
+  });
+  const data = await parseResponse<{ calls: CallSummary[] }>(response);
+  return data.calls ?? [];
+}
+
+// Recovery: finds any RINGING or ACCEPTED call the current user (caller or
+// callee) is a participant in — unlike getIncomingCalls, which only ever
+// surfaces the callee side of a RINGING call. Identity comes entirely from
+// the bearer token; there is no userId parameter to pass or spoof.
+export async function getActiveCall(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/active`, {
+    headers: authHeaders(accessToken),
+  });
+  const data = await parseResponse<{ call: CallSummary | null }>(response);
+  return data.call ?? null;
+}
+
+export async function getCall(accessToken: string, callId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<CallSummary>(response);
+}
+
+export async function getCallLiveKitCredentials(accessToken: string, callId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/livekit-token`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<LiveKitCredentials>(response);
+}
+
+export async function acceptCall(accessToken: string, callId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/accept`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<CallSummary>(response);
+}
+
+export async function declineCall(accessToken: string, callId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/decline`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<CallSummary>(response);
+}
+
+export async function cancelCall(accessToken: string, callId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/cancel`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<CallSummary>(response);
+}
+
+export async function endCall(accessToken: string, callId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/end`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<CallSummary>(response);
+}
+
+export type CallFailureReason = 'MICROPHONE_DENIED' | 'LIVEKIT_CONNECTION_FAILED' | 'NETWORK_ERROR';
+
+export async function failCall(accessToken: string, callId: string, failureReason: CallFailureReason) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/fail`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ failureReason }),
+  });
+  return parseResponse<CallSummary>(response);
 }
 
 export async function getMatches(accessToken: string) {
