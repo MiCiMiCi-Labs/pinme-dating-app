@@ -126,7 +126,9 @@ export default function LoginScreen() {
         throw new Error('Login succeeded but no session was returned.');
       }
 
-      await syncAuthUser(data.session.access_token);
+      syncAuthUser(data.session.access_token).catch((syncError) => {
+        console.warn('[auth] Failed to sync user after login:', syncError);
+      });
     } catch (err) {
       setError(getLoginErrorMessage(err));
     } finally {

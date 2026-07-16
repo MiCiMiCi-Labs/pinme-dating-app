@@ -5,9 +5,9 @@ import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { Animated, Easing, LogBox, StyleSheet, Text, View } from 'react-native';
 import { GlobalToastHost } from '@/components/global-toast';
-import { GlobalCallHost } from '@/components/global-call-host';
+// import { GlobalCallHost } from '@/components/global-call-host';
 import { AuthProvider, useAuth } from '@/contexts/auth';
-import { CallProvider } from '@/contexts/call';
+// import { CallProvider } from '@/contexts/call';
 import { colors } from '@/design/system';
 import { resetChatEvents } from '@/stores/chatEvents.store';
 import { resetDiscoveryUi } from '@/stores/discoveryUi.store';
@@ -149,10 +149,11 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <AuthCacheBoundary />
-        <CallProvider>
-          <RootNavigator />
-          <GlobalCallHost />
-        </CallProvider>
+        {/* Temporarily disabled to mute /api/v1/calls/active polling while debugging backend logs. */}
+        {/* <CallProvider> */}
+        <RootNavigator />
+        {/* <GlobalCallHost /> */}
+        {/* </CallProvider> */}
         <GlobalToastHost />
       </AuthProvider>
     </QueryClientProvider>

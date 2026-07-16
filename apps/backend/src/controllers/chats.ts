@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { calculateAge } from '../lib/age';
-import { calculateChatIntimacy } from '../lib/intimacy';
 import { prisma } from '../lib/prisma';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
@@ -11,39 +10,51 @@ async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   return user?.id ?? null;
 }
 
-const otherUserInclude = {
-  select: {
-    id: true,
-    name: true,
-    gender: true,
-    birthday: true,
-    bio: true,
-    city: true,
-    profile: true,
-    photos: {
-      orderBy: { orderIndex: 'asc' as const },
-      take: 1,
-      select: {
-        id: true,
-        url: true,
-        thumbnailUrl: true,
-        isPrimary: true,
-        isVerified: true,
-        orderIndex: true,
-      },
-    },
-  },
+const defaultChatIntimacy = {
+  level: 0,
+  label: 'New',
+  color: 'white',
+  score: 0,
+  mutualDays: 0,
+  currentStreakDays: 0,
 };
 
 function parseLimit(value: unknown): number {
-  const limit = Number(value ?? 50);
+  const limit = Number(value ?? 20);
 
   if (!Number.isInteger(limit)) {
-    return 50;
+    return 20;
   }
 
-  return Math.min(Math.max(limit, 1), 100);
+  return Math.min(Math.max(limit, 1), 50);
 }
+
+type ChatListRow = {
+  match_id: string;
+  match_created_at: Date;
+  user_id: string;
+  name: string;
+  gender: string;
+  birthday: Date;
+  city: string | null;
+  photo_id: string | null;
+  photo_url: string | null;
+  photo_thumbnail_url: string | null;
+  photo_is_primary: boolean | null;
+  photo_is_verified: boolean | null;
+  photo_order_index: number | null;
+  last_message_id: string | null;
+  last_message_sender_id: string | null;
+  last_message_content: string | null;
+  last_message_type: string | null;
+  last_message_duration_sec: number | null;
+  last_message_is_read: boolean | null;
+  last_message_recalled_at: Date | null;
+  last_message_created_at: Date | null;
+  sender_id: string | null;
+  sender_name: string | null;
+  unread_count: number;
+};
 
 export async function getChats(req: Request, res: Response) {
   try {
@@ -54,93 +65,120 @@ export async function getChats(req: Request, res: Response) {
       return;
     }
 
-    const matches = await prisma.match.findMany({
-      where: {
-        OR: [{ user1Id: dbUserId }, { user2Id: dbUserId }],
-        unmatchedAt: null,
+    const rows = await prisma.$queryRaw<ChatListRow[]>`
+      SELECT
+        m.id AS match_id,
+        m.created_at AS match_created_at,
+        other_user.id AS user_id,
+        other_user.name,
+        other_user.gender::text AS gender,
+        other_user.birthday,
+        other_user.city,
+        primary_photo.id AS photo_id,
+        primary_photo.url AS photo_url,
+        primary_photo.thumbnail_url AS photo_thumbnail_url,
+        primary_photo.is_primary AS photo_is_primary,
+        primary_photo.is_verified AS photo_is_verified,
+        primary_photo.order_index AS photo_order_index,
+        last_message.id AS last_message_id,
+        last_message.sender_id AS last_message_sender_id,
+        last_message.content AS last_message_content,
+        last_message.message_type::text AS last_message_type,
+        last_message.duration_sec AS last_message_duration_sec,
+        last_message.is_read AS last_message_is_read,
+        last_message.recalled_at AS last_message_recalled_at,
+        last_message.created_at AS last_message_created_at,
+        sender.id AS sender_id,
+        sender.name AS sender_name,
+        COALESCE(unread.unread_count, 0)::int AS unread_count
+      FROM matches m
+      JOIN users other_user
+        ON other_user.id = CASE
+          WHEN m.user1_id = ${dbUserId} THEN m.user2_id
+          ELSE m.user1_id
+        END
+      LEFT JOIN LATERAL (
+        SELECT
+          p.id,
+          p.url,
+          p.thumbnail_url,
+          p.is_primary,
+          p.is_verified,
+          p.order_index
+        FROM photos p
+        WHERE p.user_id = other_user.id
+        ORDER BY p.is_primary DESC, p.order_index ASC, p.created_at ASC
+        LIMIT 1
+      ) primary_photo ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          msg.id,
+          msg.sender_id,
+          msg.content,
+          msg.message_type,
+          msg.duration_sec,
+          msg.is_read,
+          msg.recalled_at,
+          msg.created_at
+        FROM messages msg
+        WHERE msg.match_id = m.id
+        ORDER BY msg.created_at DESC
+        LIMIT 1
+      ) last_message ON true
+      LEFT JOIN users sender ON sender.id = last_message.sender_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS unread_count
+        FROM messages unread_msg
+        WHERE unread_msg.match_id = m.id
+          AND unread_msg.sender_id <> ${dbUserId}
+          AND unread_msg.is_read = false
+      ) unread ON true
+      WHERE m.unmatched_at IS NULL
+        AND (m.user1_id = ${dbUserId} OR m.user2_id = ${dbUserId})
+      ORDER BY m.created_at DESC
+      LIMIT ${limit};
+    `;
+
+    const result = rows.map(row => ({
+      matchId: row.match_id,
+      createdAt: row.match_created_at,
+      lastMessage: row.last_message_id
+        ? {
+            id: row.last_message_id,
+            matchId: row.match_id,
+            senderId: row.last_message_sender_id,
+            content: row.last_message_content ?? '',
+            messageType: row.last_message_type,
+            durationSec: row.last_message_duration_sec,
+            isRead: row.last_message_is_read ?? false,
+            recalledAt: row.last_message_recalled_at,
+            reactions: [],
+            createdAt: row.last_message_created_at,
+            sender: row.sender_id ? { id: row.sender_id, name: row.sender_name ?? '' } : null,
+            replyTo: null,
+          }
+        : null,
+      unreadCount: row.unread_count,
+      intimacy: defaultChatIntimacy,
+      user: {
+        id: row.user_id,
+        name: row.name,
+        gender: row.gender,
+        bio: null,
+        city: row.city,
+        age: calculateAge(row.birthday),
+        photos: row.photo_id
+          ? [{
+              id: row.photo_id,
+              url: row.photo_url,
+              thumbnailUrl: row.photo_thumbnail_url,
+              isPrimary: row.photo_is_primary ?? false,
+              isVerified: row.photo_is_verified ?? false,
+              orderIndex: row.photo_order_index ?? 0,
+            }]
+          : [],
       },
-      include: {
-        user1: otherUserInclude,
-        user2: otherUserInclude,
-        messages: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          include: {
-            sender: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
-
-    const matchIds = matches.map(match => match.id);
-
-    const [unreadCounts, intimacyMessages] = matchIds.length
-      ? await Promise.all([
-          prisma.message.groupBy({
-            by: ['matchId'],
-            where: {
-              matchId: { in: matchIds },
-              senderId: { not: dbUserId },
-              isRead: false,
-            },
-            _count: { _all: true },
-          }),
-          prisma.message.findMany({
-            where: {
-              matchId: { in: matchIds },
-            },
-            select: {
-              matchId: true,
-              senderId: true,
-              messageType: true,
-              recalledAt: true,
-              createdAt: true,
-            },
-            orderBy: { createdAt: 'desc' },
-            take: Math.min(Math.max(matchIds.length * 20, 100), 500),
-          }),
-        ])
-      : [[], []];
-
-    const unreadCountByMatchId = new Map(
-      unreadCounts.map(count => [count.matchId, count._count._all])
-    );
-
-    const intimacyMessagesByMatchId = new Map<string, typeof intimacyMessages>();
-    for (const message of intimacyMessages) {
-      const messagesForMatch = intimacyMessagesByMatchId.get(message.matchId) ?? [];
-      if (messagesForMatch.length < 200) {
-        messagesForMatch.push(message);
-        intimacyMessagesByMatchId.set(message.matchId, messagesForMatch);
-      }
-    }
-
-    const result = matches.map((match) => {
-      const other = match.user1Id === dbUserId ? match.user2 : match.user1;
-      const { birthday, ...otherFields } = other;
-      const unreadCount = unreadCountByMatchId.get(match.id) ?? 0;
-      const intimacy = calculateChatIntimacy(
-        intimacyMessagesByMatchId.get(match.id) ?? [],
-        match.user1Id,
-        match.user2Id
-      );
-
-      return {
-        matchId: match.id,
-        createdAt: match.createdAt,
-        lastMessage: match.messages[0] ?? null,
-        unreadCount,
-        intimacy,
-        user: { ...otherFields, age: calculateAge(birthday) },
-      };
-    });
+    }));
 
     res.json(result);
   } catch {

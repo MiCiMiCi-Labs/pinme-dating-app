@@ -7,6 +7,7 @@ import {
   type AppProfile,
   type AppUser,
 } from '@/lib/api';
+import { getProfileCompletion, setProfileCompletion as setCachedProfileCompletion } from '@/lib/profileCompletion';
 import { registerForPushNotifications } from '@/lib/pushNotifications';
 
 type AuthContextType = {
@@ -74,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function loadProfileCompletion() {
-      if (!session?.access_token) {
+      if (!session?.access_token || !session.user.id) {
         setProfileComplete(false);
         setProfileCompletionLoading(false);
         return;
@@ -82,19 +83,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setProfileCompletionLoading(true);
 
+      const cachedComplete = await getProfileCompletion(session.user.id).catch(() => false);
+
+      if (cancelled) return;
+
+      if (cachedComplete) {
+        setProfileComplete(true);
+        setProfileCompletionLoading(false);
+      }
+
       let complete = false;
 
       try {
         const { user, profile } = await getMyProfile(session.access_token);
         complete = hasCompleteProfile(user, profile);
+        await setCachedProfileCompletion(session.user.id, complete);
       } catch (err) {
         // A 401 here means the access token itself is invalid/expired, not that
         // the profile is incomplete — sign out so the user is routed back to
         // login instead of being shown the complete-profile onboarding flow.
         if (err instanceof ApiError && err.status === 401) {
+          await setCachedProfileCompletion(session.user.id, false).catch(() => {});
           await supabase.auth.signOut();
         }
-        complete = false;
+        complete = cachedComplete;
       }
 
       if (!cancelled) {
@@ -119,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [profileComplete, session?.access_token]);
 
   const refreshProfileCompletion = async () => {
-    if (!session?.access_token) {
+    if (!session?.access_token || !session.user.id) {
       setProfileComplete(false);
       return false;
     }
@@ -127,10 +139,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { user, profile } = await getMyProfile(session.access_token);
       const complete = hasCompleteProfile(user, profile);
+      await setCachedProfileCompletion(session.user.id, complete);
       setProfileComplete(complete);
       return complete;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
+        await setCachedProfileCompletion(session.user.id, false).catch(() => {});
         await supabase.auth.signOut();
       }
       setProfileComplete(false);
