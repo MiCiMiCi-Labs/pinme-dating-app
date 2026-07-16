@@ -11,7 +11,7 @@
     ],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.pinme.app",
+      "bundleIdentifier": "com.micimici.pinme",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "PinMe needs your location to show nearby people.",
         "NSPhotoLibraryUsageDescription": "PinMe needs access to your photos to update your profile.",
@@ -24,7 +24,7 @@
       }
     },
     "android": {
-      "package": "com.pinme.app",
+      "package": "com.micimici.pinme",
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",

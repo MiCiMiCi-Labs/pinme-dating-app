@@ -1,8 +1,11 @@
-import { type AppUser, type RelationshipGoal } from '@/lib/api';
+import { type AppUser, type Gender, type RelationshipGoal } from '@/lib/api';
 
 export type { Photo } from '@/lib/api';
 
 export type ProfileDraft = {
+  name: string;
+  birthday: string;
+  gender: Gender | '';
   city: string;
   bio: string;
   height: string;
@@ -45,6 +48,9 @@ export type ProfileDraft = {
 };
 
 export const emptyDraft: ProfileDraft = {
+  name: '',
+  birthday: '',
+  gender: '',
   city: '',
   bio: '',
   height: '',
@@ -94,6 +100,9 @@ function normalizeRelationshipGoal(goal: RelationshipGoal | null | undefined): R
 export function draftFromUser(user: AppUser): ProfileDraft {
   const profile = user.profile;
   return {
+    name: user.name ?? '',
+    birthday: user.birthday ? String(user.birthday).slice(0, 10) : '',
+    gender: (user.gender as Gender | '') ?? '',
     city: user.city ?? '',
     bio: user.bio ?? '',
     height: profile?.height != null ? String(profile.height) : '',
