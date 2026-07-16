@@ -19,7 +19,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { syncAuthUser } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton, SocialIconButton, TextButton } from '@/design/system';
-import { InfoModal } from '@/components/info-modal';
 
 const oauthRedirectTo = Linking.createURL('auth/callback');
 
@@ -57,7 +56,6 @@ export default function LoginScreen() {
   const [phoneOtp, setPhoneOtp] = useState('');
   const [phoneOtpSent, setPhoneOtpSent] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
-  const [appleUnavailableVisible, setAppleUnavailableVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -189,7 +187,7 @@ export default function LoginScreen() {
     }
   };
 
-  const loginWithOAuthProvider = async (provider: 'google' | 'facebook') => {
+  const loginWithOAuthProvider = async (provider: 'apple' | 'google' | 'facebook') => {
     setError(null);
     setSubmitting(true);
 
@@ -330,7 +328,7 @@ export default function LoginScreen() {
                   {Platform.OS === 'ios' ? (
                     <SocialIconButton
                       icon="logo-apple"
-                      onPress={() => setAppleUnavailableVisible(true)}
+                      onPress={() => loginWithOAuthProvider('apple')}
                     />
                   ) : null}
                   <SocialIconButton
@@ -372,12 +370,6 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-      <InfoModal
-        visible={appleUnavailableVisible}
-        title="Apple Sign in is unavailable"
-        message="Apple Sign in is not available in this test build yet. Please continue with email, phone, Google, or Facebook."
-        onClose={() => setAppleUnavailableVisible(false)}
-      />
     </SafeAreaView>
   );
 }
