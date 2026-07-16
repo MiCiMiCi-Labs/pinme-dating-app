@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
+import { endActiveCallsForPair } from '../lib/calls';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -116,6 +117,9 @@ export async function unmatch(req: Request, res: Response) {
       where: { id: matchId },
       data: { unmatchedAt: new Date() },
     });
+
+    const otherUserId = match.user1Id === dbUserId ? match.user2Id : match.user1Id;
+    await endActiveCallsForPair(dbUserId, otherUserId);
 
     res.status(204).send();
   } catch {

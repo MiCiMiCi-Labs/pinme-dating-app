@@ -39,6 +39,10 @@ model User {
   voiceRoomParticipations VoiceRoomParticipant[]
   subscription            Subscription?
   pushTokens              PushToken[]
+  callPreferences         CallPreference[]
+  callsAsCaller           Call[]                 @relation("CallCaller")
+  callsAsCallee           Call[]                 @relation("CallCallee")
+  voipDeviceTokens        VoipDeviceToken[]
 
   @@map("users")
 }
@@ -146,14 +150,16 @@ model Swipe {
 }
 
 model Match {
-  id          String    @id @default(uuid())
-  user1Id     String    @map("user1_id")
-  user2Id     String    @map("user2_id")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  unmatchedAt DateTime? @map("unmatched_at")
-  user1       User      @relation("User1Matches", fields: [user1Id], references: [id], onDelete: Cascade)
-  user2       User      @relation("User2Matches", fields: [user2Id], references: [id], onDelete: Cascade)
-  messages    Message[]
+  id              String           @id @default(uuid())
+  user1Id         String           @map("user1_id")
+  user2Id         String           @map("user2_id")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  unmatchedAt     DateTime?        @map("unmatched_at")
+  user1           User             @relation("User1Matches", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2           User             @relation("User2Matches", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages        Message[]
+  callPreferences CallPreference[]
+  calls           Call[]
 
   @@unique([user1Id, user2Id])
   @@index([user1Id, unmatchedAt, createdAt])
@@ -172,12 +178,14 @@ model Message {
   replyToId   String?           @map("reply_to_id")
   isRead      Boolean           @default(false) @map("is_read")
   recalledAt  DateTime?         @map("recalled_at")
+  callId      String?           @unique @map("call_id")
   createdAt   DateTime          @default(now()) @map("created_at")
   match       Match             @relation(fields: [matchId], references: [id], onDelete: Cascade)
   sender      User?             @relation(fields: [senderId], references: [id], onDelete: SetNull)
   replyTo     Message?          @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
   replies     Message[]         @relation("MessageReplies")
   reactions   MessageReaction[]
+  call        Call?             @relation(fields: [callId], references: [id], onDelete: SetNull)
 
   @@index([matchId, createdAt])
   @@index([matchId, isRead, senderId])
@@ -294,6 +302,99 @@ model PushToken {
 
   @@index([userId, isActive])
   @@map("push_tokens")
+}
+
+// Per-match, per-user opt-in for private 1:1 voice calling. A call can only
+// be started once both participants' audioEnabled flags are true. See
+// docs/private-voice-calling-spec.md for the full state machine.
+model CallPreference {
+  id            String    @id @default(uuid())
+  matchId       String    @map("match_id")
+  userId        String    @map("user_id")
+  audioEnabled  Boolean   @default(false) @map("audio_enabled")
+  videoEnabled  Boolean   @default(false) @map("video_enabled")
+  lastInvitedAt DateTime? @map("last_invited_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  match         Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, userId])
+  @@index([userId])
+  @@map("call_preferences")
+}
+
+// The Call row is the single source of truth for the call state machine.
+// A partial unique index on (match_id) WHERE status IN ('RINGING','ACCEPTED')
+// is added by hand in the migration SQL (Prisma's schema DSL has no partial
+// index syntax) to guarantee at most one active call per match at the DB
+// level; the cross-match "one active call per user" invariant is enforced
+// in application code via a serializable transaction (see src/lib/calls.ts).
+model Call {
+  id            String     @id @default(uuid())
+  matchId       String     @map("match_id")
+  callerId      String     @map("caller_id")
+  calleeId      String     @map("callee_id")
+  type          CallType   @default(AUDIO)
+  status        CallStatus @default(RINGING)
+  roomName      String     @unique @map("room_name")
+  expiresAt     DateTime   @map("expires_at")
+  answeredAt    DateTime?  @map("answered_at")
+  endedAt       DateTime?  @map("ended_at")
+  endedById     String?    @map("ended_by_id")
+  durationSec   Int?       @map("duration_sec")
+  failureReason String?    @map("failure_reason")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  match         Match      @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  caller        User       @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  callee        User       @relation("CallCallee", fields: [calleeId], references: [id], onDelete: Cascade)
+  systemMessage Message?
+
+  @@index([matchId, createdAt])
+  @@index([callerId, status])
+  @@index([calleeId, status])
+  @@index([status, expiresAt])
+  @@map("calls")
+}
+
+model VoipDeviceToken {
+  id          String          @id @default(uuid())
+  userId      String          @map("user_id")
+  token       String          @unique
+  platform    DevicePlatform
+  environment ApnsEnvironment
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("voip_device_tokens")
+}
+
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ACCEPTED
+  DECLINED
+  CANCELED
+  MISSED
+  ENDED
+  FAILED
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+}
+
+enum ApnsEnvironment {
+  SANDBOX
+  PRODUCTION
 }
 
 enum Gender {

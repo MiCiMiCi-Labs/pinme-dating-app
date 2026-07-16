@@ -1,0 +1,21 @@
+-- Follow-up to 20260716030000_calls_realtime_rls: discovered while writing
+-- the RLS verification tests that `authenticated` also lacks USAGE on the
+-- `public` schema entirely (confirmed via
+-- `SELECT has_schema_privilege('authenticated', 'public', 'USAGE')` = false).
+-- Without schema USAGE, the role cannot even resolve "calls" by name
+-- (Postgres reports "relation does not exist" rather than a permission
+-- error), so the SELECT grant and RLS policy from the prior migration are
+-- unreachable — this would have silently blocked legitimate
+-- caller/callee Realtime authorization too, not just non-participants.
+--
+-- USAGE on a schema only allows name resolution of objects within it; it
+-- grants no table-level access by itself. `authenticated` still has zero
+-- table-level grants on `public` except the SELECT-only grant already
+-- given to `calls` in the prior migration, so this does not expose any
+-- additional data.
+--
+-- New migration rather than editing 20260716030000 because that migration
+-- has already been applied and recorded (with a checksum) in this shared
+-- dev database.
+
+GRANT USAGE ON SCHEMA public TO authenticated;

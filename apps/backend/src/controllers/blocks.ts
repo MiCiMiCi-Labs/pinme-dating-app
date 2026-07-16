@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { endActiveCallsForPair } from '../lib/calls';
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -101,6 +102,11 @@ export async function blockUser(req: Request, res: Response) {
         data: { leftAt: new Date() },
       });
     }
+
+    // Blocking must immediately end any private call in progress between the
+    // two users (RINGING -> CANCELED, ACCEPTED -> ENDED) — see
+    // docs/private-voice-calling-spec.md "拉黑与解除 Match 联动".
+    await endActiveCallsForPair(blockerId, blockedId);
 
     res.status(201).json(block);
   } catch {
