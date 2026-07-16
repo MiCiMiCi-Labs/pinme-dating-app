@@ -1,81 +1,128 @@
+import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, IconButton, PillActionButton, RoundActionButton } from '@/design/system';
-import { type Photo, type PublicUser } from '@/lib/api';
+import {
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { colors, IconButton, PillActionButton, RoundActionButton, TextButton } from '@/design/system';
+import { type AppProfile, type Photo, type PublicUser } from '@/lib/api';
+import { formatProfileValue, getVisibleProfileValue, hasMeaningfulValue } from '@/lib/profileDisplay';
+
+type InfoItem = {
+  label: string;
+  value: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+};
+
+type PromptItem = {
+  question: string;
+  answer: string;
+};
 
 export function PhotoCarousel({
   photos,
   height,
   onMorePress,
+  onBackPress,
 }: {
   photos: Photo[];
   height: number;
   onMorePress?: () => void;
+  onBackPress?: () => void;
 }) {
   const [index, setIndex] = useState(0);
-  const indexRef = useRef(0);
-  const current = photos[index] ?? null;
+  const scrollRef = useRef<ScrollView>(null);
+  const { width: windowWidth } = useWindowDimensions();
+  const pageWidth = Math.max(0, windowWidth - 32);
+  const currentIndex = Math.min(index, Math.max(photos.length - 1, 0));
 
-  function handleTap(side: 'left' | 'right') {
-    const next = side === 'left'
-      ? Math.max(0, indexRef.current - 1)
-      : Math.min(photos.length - 1, indexRef.current + 1);
-    indexRef.current = next;
-    setIndex(next);
-  }
+  const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const width = event.nativeEvent.layoutMeasurement.width;
+    if (!width) return;
+    setIndex(Math.round(event.nativeEvent.contentOffset.x / width));
+  };
 
   return (
-    <View style={{ height }}>
-      {current ? (
-        <Image source={{ uri: current.url }} style={StyleSheet.absoluteFill} contentFit="cover" />
+    <View style={[styles.photoShell, { height }]}>
+      {photos.length ? (
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={handleScrollEnd}
+          style={styles.photoPager}
+        >
+          {photos.map((photo) => (
+            <View key={photo.id} style={[styles.photoPage, { width: pageWidth }]}>
+              <Image source={{ uri: photo.url }} style={styles.photo} contentFit="cover" />
+            </View>
+          ))}
+        </ScrollView>
       ) : (
-        <View style={[StyleSheet.absoluteFill, styles.noPhoto]} />
+        <EmptyPhotoPlaceholder />
       )}
 
-      {photos.length > 1 && (
-        <>
-          <View style={styles.progressBars}>
-            {photos.map((_, i) => (
-              <View key={i} style={styles.progressBarTrack}>
-                <View style={[styles.progressBarFill, i <= index && styles.progressBarActive]} />
-              </View>
-            ))}
-          </View>
-          <View style={[StyleSheet.absoluteFill, styles.tapZones]} pointerEvents="box-none">
-            <Pressable style={styles.tapLeft} onPress={() => handleTap('left')} />
-            <Pressable style={styles.tapRight} onPress={() => handleTap('right')} />
-          </View>
-        </>
-      )}
+      {photos.length > 1 ? (
+        <View style={styles.photoDots}>
+          {photos.map((photo, dotIndex) => (
+            <Pressable
+              key={photo.id}
+              style={[styles.photoDot, dotIndex === currentIndex && styles.photoDotActive]}
+              onPress={() => {
+                scrollRef.current?.scrollTo({ x: dotIndex * pageWidth, animated: true });
+                setIndex(dotIndex);
+              }}
+            />
+          ))}
+        </View>
+      ) : null}
 
       <LinearGradient
-        colors={['transparent', 'rgba(255,255,255,0.85)', '#FFFFFF']}
-        style={styles.fade}
+        colors={['rgba(0,0,0,0.18)', 'transparent', 'rgba(0,0,0,0.5)']}
+        locations={[0, 0.45, 1]}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
       />
-      <IconButton icon="chevron-back" onPress={() => router.back()} style={styles.back} />
+
+      {onBackPress ? (
+        <IconButton
+          icon="chevron-back"
+          onPress={onBackPress}
+          color="#FFFFFF"
+          style={styles.backButton}
+        />
+      ) : null}
+
       {onMorePress ? (
-        <IconButton icon="ellipsis-horizontal" onPress={onMorePress} style={styles.more} />
+        <IconButton
+          icon="ellipsis-horizontal"
+          onPress={onMorePress}
+          color="#FFFFFF"
+          style={styles.moreButton}
+        />
       ) : null}
     </View>
   );
 }
 
-const GOAL_LABELS: Record<string, string> = {
-  CASUAL: 'Casual dating',
-  SERIOUS: 'Serious relationship',
-  FRIENDSHIP: 'Friendship',
-  UNDECIDED: 'Still figuring out',
-};
-
-function Badge({ emoji, label }: { emoji: string; label: string }) {
+export function EmptyPhotoPlaceholder() {
   return (
-    <View style={styles.badge}>
-      <Text style={styles.badgeEmoji}>{emoji}</Text>
-      <Text style={styles.badgeText}>{label}</Text>
+    <View style={styles.emptyPhoto}>
+      <View style={styles.emptyPhotoIcon}>
+        <Ionicons name="image-outline" size={30} color={colors.primary} />
+      </View>
+      <Text style={styles.emptyPhotoTitle}>No photo yet</Text>
+      <Text style={styles.emptyPhotoText}>Photos will appear here once they are added.</Text>
     </View>
   );
 }
@@ -87,6 +134,7 @@ export function ProfileDetailContent({
   onMessage,
   liked,
   variant = 'discovery',
+  preview = false,
 }: {
   user: PublicUser | null;
   onLike?: () => void;
@@ -94,337 +142,611 @@ export function ProfileDetailContent({
   onMessage?: () => void;
   liked?: boolean;
   variant?: 'discovery' | 'matched';
+  preview?: boolean;
 }) {
-  const profile = user?.profile;
-
-  const badges = [
-    profile?.height         ? { emoji: '📏', label: `${profile.height} cm` }                              : null,
-    profile?.education      ? { emoji: '🎓', label: profile.education }                                   : null,
-    profile?.relationshipGoal ? { emoji: '💛', label: GOAL_LABELS[profile.relationshipGoal] ?? profile.relationshipGoal } : null,
-    profile?.mbti           ? { emoji: '🧠', label: profile.mbti }                                        : null,
-    profile?.constellation  ? { emoji: '✨', label: profile.constellation }                               : null,
-    profile?.drinking       ? { emoji: '🍷', label: profile.drinking }                                    : null,
-    profile?.smoking        ? { emoji: '🚬', label: profile.smoking }                                     : null,
-  ].filter(Boolean) as { emoji: string; label: string }[];
-
-  const prompts = [
-    { question: profile?.prompt1Question ?? 'A little more about me', answer: profile?.prompt1 },
-    { question: profile?.prompt2Question ?? 'You should know', answer: profile?.prompt2 },
-    { question: profile?.prompt3Question ?? 'Message me if', answer: profile?.prompt3 },
-  ].filter((prompt) => prompt.answer?.trim());
+  const profile = user?.profile ?? null;
+  const name = user?.name?.trim() || 'Profile';
+  const heading = user ? `${name}${user.age ? `, ${user.age}` : ''}` : 'Profile';
+  const relationshipGoal = formatProfileValue(profile?.relationshipGoal);
+  const coreBadges = buildCoreBadges(profile);
+  const prompts = buildPrompts(profile);
+  const moreAbout = buildMoreAbout(profile, coreBadges.map(item => item.label));
+  const lifestyle = buildLifestyle(profile);
+  const relationshipRows = buildRelationshipRows(profile);
+  const interests = profile?.interests?.filter(hasMeaningfulValue) ?? [];
+  const languages = getVisibleProfileValue(profile, 'languages', profile?.languages ?? []);
 
   return (
     <>
-      <View style={styles.info}>
-        <Text style={styles.name}>
-          {user ? `${user.name}, ${user.age}` : '—'}
-        </Text>
-        <Text style={styles.role}>
-          {profile?.jobTitle ?? user?.city ?? ''}
-        </Text>
+      <View style={styles.content}>
+        <ProfileHeader
+          name={heading}
+          city={user?.city}
+          relationshipGoal={relationshipGoal}
+        />
 
-        {badges.length > 0 && (
-          <View style={styles.badges}>
-            {badges.map((b, i) => <Badge key={i} emoji={b.emoji} label={b.label} />)}
-          </View>
-        )}
-
-        {user?.city ? (
-          <>
-            <Text style={styles.sectionTitle}>Location</Text>
-            <Text style={styles.bodyText}>{user.city}</Text>
-          </>
-        ) : null}
-
-        {user?.bio ? (
-          <>
-            <Text style={styles.sectionTitle}>About</Text>
-            <Text style={styles.bodyText}>{user.bio}</Text>
-          </>
-        ) : null}
-
-        {profile ? (
-          <>
-            <Text style={styles.sectionTitle}>Details</Text>
-            <View style={styles.infoGrid}>
-              <InfoPill label="Pronouns" value={profile.pronouns} />
-              <InfoPill label="Orientation" value={profile.sexualOrientation} />
-              <InfoPill label="Height" value={profile.height ? `${profile.height} cm` : null} />
-              <InfoPill label="Job" value={profile.jobTitle} />
-              <InfoPill label="Company" value={profile.company} />
-              <InfoPill label="Education" value={profile.educationLevel ?? profile.education} />
-              <InfoPill label="Hometown" value={profile.hometown} />
-              <InfoPill label="Star sign" value={profile.constellation} />
-              <InfoPill label="MBTI" value={profile.mbti} />
-            </View>
-
-            <Text style={styles.sectionTitle}>Lifestyle</Text>
-            <View style={styles.infoGrid}>
-              <InfoPill label="Smoking" value={profile.smoking} />
-              <InfoPill label="Drinking" value={profile.drinking} />
-              <InfoPill label="Exercise" value={profile.exercise} />
-              <InfoPill label="Diet" value={profile.dietary} />
-              <InfoPill label="Drugs" value={profile.drugs} />
-              <InfoPill label="Pets" value={profile.pets} />
-              <InfoPill label="Sleep" value={profile.sleepHabit} />
-              <InfoPill label="Social" value={profile.socialHabit} />
-            </View>
-
-            <Text style={styles.sectionTitle}>Relationship and future</Text>
-            <View style={styles.infoGrid}>
-              <InfoPill label="Children" value={profile.children} />
-              <InfoPill label="Wants children" value={profile.wantsChildren} />
-              <InfoPill label="Relationship style" value={profile.relationshipStyle} />
-              <InfoPill label="Communication" value={profile.communicationStyle} />
-            </View>
-          </>
-        ) : null}
-
-        {profile?.idealFirstDate ? (
-          <>
-            <Text style={styles.sectionTitle}>Ideal first date</Text>
-            <Text style={styles.bodyText}>{profile.idealFirstDate}</Text>
-          </>
-        ) : null}
-
-        {profile?.interests?.length ? (
-          <>
-            <Text style={styles.sectionTitle}>Interests</Text>
-            <View style={styles.chipRow}>
-              {profile.interests.map((interest) => (
-                <Text key={interest} style={styles.chip}>{interest}</Text>
-              ))}
-            </View>
-          </>
-        ) : null}
-
-        {profile?.languages?.length ? (
-          <>
-            <Text style={styles.sectionTitle}>Languages</Text>
-            <View style={styles.chipRow}>
-              {profile.languages.map((language) => (
-                <Text key={language} style={styles.chip}>{language}</Text>
-              ))}
-            </View>
-          </>
-        ) : null}
-
-        {profile?.weekend ? (
-          <>
-            <Text style={styles.sectionTitle}>Ideal weekend</Text>
-            <Text style={styles.bodyText}>{profile.weekend}</Text>
-          </>
-        ) : null}
-
-        {profile?.favorites ? (
-          <>
-            <Text style={styles.sectionTitle}>Favorites</Text>
-            <Text style={styles.bodyText}>{profile.favorites}</Text>
-          </>
-        ) : null}
-
-        {prompts.length ? (
-          <>
-            <Text style={styles.sectionTitle}>Prompts</Text>
-            {prompts.map((prompt, i) => (
-              <View key={i} style={styles.promptCard}>
-                <Text style={styles.promptQuestion}>{prompt.question}</Text>
-                <Text style={styles.bodyText}>{prompt.answer}</Text>
-              </View>
+        {coreBadges.length ? (
+          <View style={styles.badgeRow}>
+            {coreBadges.map(item => (
+              <ProfileBadge key={`${item.label}-${item.value}`} item={item} />
             ))}
-          </>
+          </View>
+        ) : null}
+
+        {hasMeaningfulValue(user?.bio) ? (
+          <ProfileSection title={`About ${name}`}>
+            <Text style={styles.bodyText}>{user?.bio?.trim()}</Text>
+          </ProfileSection>
+        ) : null}
+
+        {prompts[0] ? <ProfilePromptCard prompt={prompts[0]} /> : null}
+
+        {interests.length ? (
+          <ProfileSection title="Interests">
+            <View style={styles.chipRow}>
+              {interests.map(interest => (
+                <InterestChip key={interest} label={formatProfileValue(interest)} />
+              ))}
+            </View>
+          </ProfileSection>
+        ) : null}
+
+        {prompts.slice(1).map(prompt => (
+          <ProfilePromptCard key={`${prompt.question}-${prompt.answer}`} prompt={prompt} />
+        ))}
+
+        {moreAbout.length ? (
+          <ProfileSection title={`More about ${name}`}>
+            <ProfileInfoGrid items={moreAbout} />
+          </ProfileSection>
+        ) : null}
+
+        {Array.isArray(languages) && languages.length ? (
+          <ProfileSection title="Languages">
+            <Text style={styles.compactLine}>{languages.map(formatProfileValue).join(' · ')}</Text>
+          </ProfileSection>
+        ) : null}
+
+        {lifestyle.length ? (
+          <ProfileSection title="Lifestyle">
+            <View style={styles.rowCard}>
+              {lifestyle.map((item, index) => (
+                <ProfileInfoRow
+                  key={item.label}
+                  label={item.label}
+                  value={item.value}
+                  isLast={index === lifestyle.length - 1}
+                />
+              ))}
+            </View>
+          </ProfileSection>
+        ) : null}
+
+        {relationshipRows.length ? (
+          <ProfileSection title="Relationship goals">
+            <View style={styles.rowCard}>
+              {relationshipRows.map((item, index) => (
+                <ProfileInfoRow
+                  key={item.label}
+                  label={item.label}
+                  value={item.value}
+                  isLast={index === relationshipRows.length - 1}
+                />
+              ))}
+            </View>
+          </ProfileSection>
         ) : null}
       </View>
 
-      {variant === 'matched' ? (
-        onMessage ? (
-          <View style={styles.matchedAction}>
-            <PillActionButton label="Message" icon="chatbubble-ellipses" onPress={onMessage} />
+      {!preview && (
+        variant === 'matched' ? (
+          onMessage ? (
+            <View style={styles.matchedAction}>
+              <PillActionButton label="Message" icon="chatbubble-ellipses" onPress={onMessage} />
+            </View>
+          ) : null
+        ) : (
+          <View style={styles.actionRow}>
+            <RoundActionButton icon="close" color={colors.orange} onPress={onDislike ?? (() => router.back())} />
+            {onMessage ? (
+              <RoundActionButton icon="chatbubble-ellipses" filled size={88} iconSize={32} onPress={onMessage} />
+            ) : null}
+            <RoundActionButton icon="heart" active={liked} iconSize={28} onPress={onLike} />
           </View>
-        ) : null
-      ) : (
-        <View style={styles.actionRow}>
-          <RoundActionButton icon="close" color={colors.orange} onPress={onDislike ?? (() => router.back())} />
-          {onMessage ? (
-            <RoundActionButton icon="chatbubble-ellipses" filled size={94} iconSize={36} onPress={onMessage} />
-          ) : null}
-          <RoundActionButton icon="heart" active={liked} iconSize={28} onPress={onLike} />
-        </View>
+        )
       )}
     </>
   );
 }
 
-function InfoPill({ label, value }: { label: string; value?: string | number | null }) {
-  if (value == null || value === '') return null;
-
+export function ProfilePreviewHeader({
+  onClose,
+  onEdit,
+}: {
+  onClose: () => void;
+  onEdit: () => void;
+}) {
   return (
-    <View style={styles.infoPill}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{value}</Text>
+    <View style={styles.previewHeader}>
+      <IconButton icon="close" onPress={onClose} size={42} color={colors.text} style={styles.headerButton} />
+      <Text style={styles.previewTitle}>Profile preview</Text>
+      <TextButton onPress={onEdit}>Edit</TextButton>
     </View>
   );
 }
 
+function ProfileHeader({
+  name,
+  city,
+  relationshipGoal,
+}: {
+  name: string;
+  city?: string | null;
+  relationshipGoal?: string;
+}) {
+  return (
+    <View style={styles.profileHeader}>
+      <Text style={styles.name}>{name}</Text>
+      {hasMeaningfulValue(city) ? <Text style={styles.location}>{city}</Text> : null}
+      {hasMeaningfulValue(relationshipGoal) ? (
+        <Text style={styles.intention}>{relationshipGoal}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function ProfileBadge({ item }: { item: InfoItem }) {
+  return (
+    <View style={styles.badge}>
+      {item.icon ? <Ionicons name={item.icon} size={14} color={colors.primary} /> : null}
+      <Text style={styles.badgeText}>{item.value}</Text>
+    </View>
+  );
+}
+
+function ProfileSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
+function ProfilePromptCard({ prompt }: { prompt: PromptItem }) {
+  return (
+    <View style={styles.promptCard}>
+      <Text style={styles.promptQuestion}>{prompt.question}</Text>
+      <Text style={styles.promptAnswer}>{prompt.answer}</Text>
+    </View>
+  );
+}
+
+function ProfileInfoGrid({ items }: { items: InfoItem[] }) {
+  return (
+    <View style={styles.infoGrid}>
+      {items.map(item => (
+        <ProfileInfoCard key={item.label} item={item} />
+      ))}
+    </View>
+  );
+}
+
+function ProfileInfoCard({ item }: { item: InfoItem }) {
+  return (
+    <View style={styles.infoCard}>
+      <Text style={styles.infoLabel}>{item.label}</Text>
+      <Text style={styles.infoValue}>{item.value}</Text>
+    </View>
+  );
+}
+
+function ProfileInfoRow({
+  label,
+  value,
+  isLast,
+}: {
+  label: string;
+  value: string;
+  isLast?: boolean;
+}) {
+  return (
+    <View style={[styles.infoRow, isLast && styles.infoRowLast]}>
+      <Text style={styles.infoRowLabel}>{label}</Text>
+      <Text style={styles.infoRowValue}>{value}</Text>
+    </View>
+  );
+}
+
+function InterestChip({ label }: { label: string }) {
+  return <Text style={styles.interestChip}>{label}</Text>;
+}
+
+function buildCoreBadges(profile: AppProfile | null): InfoItem[] {
+  if (!profile) return [];
+
+  return [
+    profile.height ? { label: 'Height', value: `${profile.height} cm`, icon: 'resize-outline' as const } : null,
+    getVisibleProfileValue(profile, 'educationLevel', profile.educationLevel ?? profile.education)
+      ? { label: 'Education', value: formatProfileValue(profile.educationLevel ?? profile.education), icon: 'school-outline' as const }
+      : null,
+    getVisibleProfileValue(profile, 'pronouns', profile.pronouns)
+      ? { label: 'Pronouns', value: formatProfileValue(profile.pronouns), icon: 'person-outline' as const }
+      : null,
+    getVisibleProfileValue(profile, 'mbti', profile.mbti)
+      ? { label: 'MBTI', value: formatProfileValue(profile.mbti), icon: 'sparkles-outline' as const }
+      : null,
+    getVisibleProfileValue(profile, 'constellation', profile.constellation)
+      ? { label: 'Star sign', value: formatProfileValue(profile.constellation), icon: 'star-outline' as const }
+      : null,
+  ].filter(Boolean).slice(0, 5) as InfoItem[];
+}
+
+function buildPrompts(profile: AppProfile | null): PromptItem[] {
+  if (!profile) return [];
+
+  return [
+    { question: profile.prompt1Question, answer: profile.prompt1 },
+    { question: profile.prompt2Question, answer: profile.prompt2 },
+    { question: profile.prompt3Question, answer: profile.prompt3 },
+  ]
+    .filter((prompt): prompt is { question: string; answer: string } =>
+      hasMeaningfulValue(prompt.question) && hasMeaningfulValue(prompt.answer)
+    )
+    .slice(0, 3)
+    .map(prompt => ({
+      question: prompt.question.trim(),
+      answer: prompt.answer.trim(),
+    }));
+}
+
+function buildMoreAbout(profile: AppProfile | null, alreadyShownLabels: string[]): InfoItem[] {
+  if (!profile) return [];
+  const shown = new Set(alreadyShownLabels);
+
+  const items: Array<InfoItem | null> = [
+    !shown.has('Education') && getVisibleProfileValue(profile, 'educationLevel', profile.educationLevel ?? profile.education)
+      ? { label: 'Education', value: formatProfileValue(profile.educationLevel ?? profile.education) }
+      : null,
+    getVisibleProfileValue(profile, 'jobTitle', profile.jobTitle)
+      ? { label: 'Job', value: formatProfileValue(profile.jobTitle) }
+      : null,
+    getVisibleProfileValue(profile, 'company', profile.company)
+      ? { label: 'Workplace', value: formatProfileValue(profile.company) }
+      : null,
+    getVisibleProfileValue(profile, 'hometown', profile.hometown)
+      ? { label: 'Hometown', value: formatProfileValue(profile.hometown) }
+      : null,
+    !shown.has('Height') && profile.height
+      ? { label: 'Height', value: `${profile.height} cm` }
+      : null,
+    !shown.has('Star sign') && getVisibleProfileValue(profile, 'constellation', profile.constellation)
+      ? { label: 'Star sign', value: formatProfileValue(profile.constellation) }
+      : null,
+    !shown.has('MBTI') && getVisibleProfileValue(profile, 'mbti', profile.mbti)
+      ? { label: 'MBTI', value: formatProfileValue(profile.mbti) }
+      : null,
+    getVisibleProfileValue(profile, 'sexualOrientation', profile.sexualOrientation)
+      ? { label: 'Orientation', value: formatProfileValue(profile.sexualOrientation) }
+      : null,
+  ];
+
+  return items.filter(Boolean) as InfoItem[];
+}
+
+function buildLifestyle(profile: AppProfile | null): InfoItem[] {
+  if (!profile) return [];
+
+  const rows: Array<[string, string, unknown]> = [
+    ['Smoking', 'smoking', profile.smoking],
+    ['Drinking', 'drinking', profile.drinking],
+    ['Exercise', 'exercise', profile.exercise],
+    ['Diet', 'dietary', profile.dietary],
+    ['Drug use', 'drugs', profile.drugs],
+    ['Pets', 'pets', profile.pets],
+    ['Sleep schedule', 'sleepHabit', profile.sleepHabit],
+    ['Social style', 'socialHabit', profile.socialHabit],
+  ];
+
+  return rows
+    .map(([label, field, value]) => getVisibleProfileValue(profile, field, value)
+      ? { label, value: formatProfileValue(value) }
+      : null
+    )
+    .filter(Boolean) as InfoItem[];
+}
+
+function buildRelationshipRows(profile: AppProfile | null): InfoItem[] {
+  if (!profile) return [];
+
+  const rows: Array<[string, string, unknown]> = [
+    ['Looking for', 'relationshipGoal', profile.relationshipGoal],
+    ['Relationship style', 'relationshipStyle', profile.relationshipStyle],
+    ['Children', 'children', profile.children],
+    ['Future plans', 'wantsChildren', profile.wantsChildren],
+    ['Communication', 'communicationStyle', profile.communicationStyle],
+    ['Ideal first date', 'idealFirstDate', profile.idealFirstDate],
+  ];
+
+  return rows
+    .map(([label, field, value]) => getVisibleProfileValue(profile, field, value)
+      ? { label, value: formatProfileValue(value) }
+      : null
+    )
+    .filter(Boolean) as InfoItem[];
+}
+
 const styles = StyleSheet.create({
-  noPhoto: {
-    backgroundColor: colors.line,
-  },
-  back: {
-    position: 'absolute',
-    top: 30,
-    left: 28,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    borderColor: 'rgba(255,255,255,0.32)',
-  },
-  more: {
-    position: 'absolute',
-    top: 30,
-    right: 28,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    borderColor: 'rgba(255,255,255,0.32)',
-  },
-  progressBars: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
-    flexDirection: 'row',
-    gap: 4,
-  },
-  progressBarTrack: {
-    flex: 1,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.4)',
+  photoShell: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    borderRadius: 28,
     overflow: 'hidden',
+    backgroundColor: '#F4F4F7',
   },
-  progressBarFill: {
+  photoPager: {
     flex: 1,
-    backgroundColor: 'transparent',
   },
-  progressBarActive: {
+  photoPage: {
+    width: '100%',
+    height: '100%',
+  },
+  photo: {
+    width: '100%',
+    height: '100%',
+  },
+  photoDots: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
+    bottom: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  photoDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  photoDotActive: {
+    width: 18,
     backgroundColor: '#FFFFFF',
   },
-  fade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 120 },
-  tapZones: { flexDirection: 'row' },
-  tapLeft: { flex: 1 },
-  tapRight: { flex: 1 },
+  moreButton: {
+    position: 'absolute',
+    top: 18,
+    right: 18,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  backButton: {
+    position: 'absolute',
+    top: 18,
+    left: 18,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  emptyPhoto: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: '#F7F7FA',
+  },
+  emptyPhotoIcon: {
+    width: 68,
+    height: 68,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.soft,
+    marginBottom: 16,
+  },
+  emptyPhotoTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  emptyPhotoText: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  previewHeader: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+  },
+  headerButton: {
+    borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
+  },
+  previewTitle: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  content: {
+    paddingHorizontal: 22,
+    paddingTop: 22,
+    paddingBottom: 28,
+  },
+  profileHeader: {
+    marginBottom: 14,
+  },
+  name: {
+    color: colors.text,
+    fontSize: 31,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  location: {
+    color: colors.muted,
+    fontSize: 16,
+    marginTop: 5,
+  },
+  intention: {
+    color: colors.primary,
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 18,
+  },
+  badge: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#F7F7FA',
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#EFEFF4',
+  },
+  badgeText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  section: {
+    marginTop: 26,
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
+  bodyText: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+  },
+  promptCard: {
+    borderRadius: 20,
+    backgroundColor: '#F7F7FA',
+    padding: 18,
+    marginTop: 24,
+    borderWidth: 1,
+    borderColor: '#EFEFF4',
+  },
+  promptQuestion: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 23,
+  },
+  promptAnswer: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 24,
+    marginTop: 10,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  interestChip: {
+    overflow: 'hidden',
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '600',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#F3A8B3',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    backgroundColor: '#FFFFFF',
+  },
+  compactLine: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  infoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  infoCard: {
+    width: '48.4%',
+    minHeight: 86,
+    justifyContent: 'center',
+    borderRadius: 18,
+    backgroundColor: '#F7F7FA',
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#EFEFF4',
+  },
+  infoLabel: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 7,
+  },
+  infoValue: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  rowCard: {
+    borderRadius: 18,
+    backgroundColor: '#F7F7FA',
+    borderWidth: 1,
+    borderColor: '#EFEFF4',
+    overflow: 'hidden',
+  },
+  infoRow: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    paddingHorizontal: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#ECECF1',
+  },
+  infoRowLast: {
+    borderBottomWidth: 0,
+  },
+  infoRowLabel: {
+    flex: 1,
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  infoRowValue: {
+    flex: 1.2,
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
   actionRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 24,
-    paddingTop: 32,
-    paddingBottom: 48,
-  },
-  smallAction: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-  },
-  smallActionActive: {
-    backgroundColor: colors.primary,
-  },
-  bigAction: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: colors.primary,
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
+    gap: 26,
+    paddingTop: 6,
+    paddingBottom: 42,
   },
   matchedAction: {
-    paddingHorizontal: 28,
-    paddingTop: 18,
-    paddingBottom: 48,
+    paddingHorizontal: 22,
+    paddingBottom: 40,
   },
-  messageButton: {
-    height: 58,
-    borderRadius: 18,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 10,
-  },
-  messageButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  info: { paddingHorizontal: 28, paddingTop: 28 },
-  name: { color: colors.text, fontSize: 25, fontWeight: '900' },
-  role: { color: colors.muted, marginTop: 4 },
-  badges: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 16,
-    marginBottom: 4,
-  },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: '#F2F2F7',
-  },
-  badgeEmoji: { fontSize: 14 },
-  badgeText: { color: colors.text, fontSize: 13, fontWeight: '600' },
-  sectionTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '900',
-    marginTop: 22,
-    marginBottom: 8,
-  },
-  bodyText: { color: colors.muted, fontSize: 14, lineHeight: 22 },
-  infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  infoPill: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.line,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#FFFFFF',
-  },
-  infoLabel: { color: colors.muted, fontSize: 11, fontWeight: '800' },
-  infoValue: { color: colors.text, fontSize: 13, fontWeight: '900', marginTop: 3 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: {
-    overflow: 'hidden',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: '800',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  promptCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: 14,
-    marginBottom: 10,
-    backgroundColor: '#FFFFFF',
-  },
-  promptQuestion: { color: colors.text, fontSize: 14, fontWeight: '900', marginBottom: 6 },
-  gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  galleryImage: { width: '30.6%', aspectRatio: 1, borderRadius: 6, overflow: 'hidden' },
-  galleryImageLarge: { width: '48%', aspectRatio: 0.78 },
-  fillImage: { width: '100%', height: '100%' },
 });

@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { PhotoCarousel, ProfileDetailContent } from '@/components/profile-detail';
+import { PhotoCarousel, ProfileDetailContent, ProfilePreviewHeader } from '@/components/profile-detail';
 import { colors } from '@/design/system';
 import { blockUser as blockUserApi, createSwipe, getUserById, reportUser as reportUserApi, type PublicUser } from '@/lib/api';
 import { useAuth } from '@/contexts/auth';
@@ -22,10 +22,10 @@ import { markDiscoveryNeedsRefresh } from '@/stores/discoveryUi.store';
 import { markVoiceRoomNeedsRefresh } from '@/stores/voiceRoom.store';
 import { showToast } from '@/stores/toast.store';
 
-type ProfileDetailSource = 'discover' | 'likes' | 'matches';
+type ProfileDetailSource = 'discover' | 'likes' | 'matches' | 'preview';
 
 function resolveSource(raw: string | undefined): ProfileDetailSource {
-  return raw === 'likes' || raw === 'matches' ? raw : 'discover';
+  return raw === 'likes' || raw === 'matches' || raw === 'preview' ? raw : 'discover';
 }
 
 export default function ProfileDetailScreen() {
@@ -42,6 +42,7 @@ export default function ProfileDetailScreen() {
     photoUrl?: string;
   }>();
   const source = resolveSource(rawSource);
+  const navigation = useNavigation();
   const { session } = useAuth();
   const likeFromLikesMutation = useMatchFromLikesList();
   const dislikeFromLikesMutation = useDislikeFromLikesList();
@@ -55,6 +56,23 @@ export default function ProfileDetailScreen() {
   const stampScale = useRef(new Animated.Value(1.4)).current;
   const { height } = useWindowDimensions();
   const carouselHeight = Math.min(height * 0.55, 440);
+  const isPreview = source === 'preview';
+
+  useEffect(() => {
+    const parent = navigation.getParent();
+    parent?.setOptions({ tabBarStyle: { display: 'none' } });
+    return () => {
+      parent?.setOptions({
+        tabBarStyle: {
+          height: 84,
+          borderTopWidth: 0,
+          backgroundColor: '#FFFFFF',
+          elevation: 0,
+          shadowOpacity: 0,
+        },
+      });
+    };
+  }, [navigation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -309,7 +327,18 @@ export default function ProfileDetailScreen() {
     <SafeAreaView style={styles.screen}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View>
-          <PhotoCarousel photos={photos} height={carouselHeight} onMorePress={openSafetyMenu} />
+          {isPreview ? (
+            <ProfilePreviewHeader
+              onClose={() => router.back()}
+              onEdit={() => router.replace('/(main)/profile')}
+            />
+          ) : null}
+          <PhotoCarousel
+            photos={photos}
+            height={carouselHeight}
+            onMorePress={isPreview ? undefined : openSafetyMenu}
+            onBackPress={isPreview ? undefined : () => router.back()}
+          />
           {stamp !== null && (
             <Animated.View
               style={[
@@ -338,6 +367,7 @@ export default function ProfileDetailScreen() {
           onMessage={matchId ? handleMessage : undefined}
           liked={liked}
           variant={source === 'matches' ? 'matched' : 'discovery'}
+          preview={isPreview}
         />
       </ScrollView>
     </SafeAreaView>
