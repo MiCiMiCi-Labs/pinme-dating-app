@@ -12,6 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.micimici.pinme",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "PinMe needs your location to show nearby people.",
         "NSPhotoLibraryUsageDescription": "PinMe needs access to your photos to update your profile.",
@@ -20,7 +21,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["voip", "remote-notification"]
       }
     },
     "android": {
@@ -53,7 +55,9 @@
         }
       ],
       "expo-notifications",
-      "expo-font"
+      "expo-font",
+      "@config-plugins/react-native-callkeep",
+      "./plugins/withVoipPushKit"
     ],
     "scheme": "pinme",
     "experiments": {

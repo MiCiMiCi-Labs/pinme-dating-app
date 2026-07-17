@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { Animated, Easing, LogBox, StyleSheet, Text, View } from 'react-native';
 import { GlobalToastHost } from '@/components/global-toast';
 import { GlobalCallHost } from '@/components/global-call-host';
+import { IosVoipCallKitCoordinator } from '@/components/ios-voip-callkit-coordinator';
 import { AuthProvider, useAuth } from '@/contexts/auth';
 import { CallProvider } from '@/contexts/call';
 import { colors } from '@/design/system';
@@ -152,6 +153,7 @@ export default function RootLayout() {
         <CallProvider>
           <RootNavigator />
           <GlobalCallHost />
+          <IosVoipCallKitCoordinator />
         </CallProvider>
         <GlobalToastHost />
       </AuthProvider>

@@ -799,6 +799,40 @@ export async function redeemPromoCode(accessToken: string, code: string) {
 
 // --- Private 1:1 voice calling (docs/private-voice-calling-spec.md) ---------
 
+// VoIP device token registration — matches
+// apps/backend/src/controllers/callSessions.ts's registerDeviceSchema
+// (`token`/`platform`/`environment`, all required, `.strict()`) and its
+// DELETE /:token route.
+export type VoipDevicePlatform = 'IOS' | 'ANDROID';
+export type VoipDeviceEnvironment = 'SANDBOX' | 'PRODUCTION';
+
+export async function registerVoipDevice(
+  accessToken: string,
+  body: { token: string; platform: VoipDevicePlatform; environment: VoipDeviceEnvironment }
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/devices`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  return parseResponse<{ id: string; platform: VoipDevicePlatform; environment: VoipDeviceEnvironment }>(response);
+}
+
+// The path segment is a raw device token (hex string) — encodeURIComponent
+// is required even though the current hex-only format wouldn't itself need
+// escaping, since this must stay correct if the token format ever changes.
+export async function unregisterVoipDevice(accessToken: string, token: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/devices/${encodeURIComponent(token)}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  if (response.status === 204) return;
+  return parseResponse<void>(response);
+}
+
 export type CallPreferenceState = {
   mineEnabled: boolean;
   theirsEnabled: boolean;

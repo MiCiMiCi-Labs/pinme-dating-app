@@ -27,6 +27,7 @@ export function GlobalCallHost() {
     reportMediaDisconnected,
     reportMediaFailure,
     confirmCallOrFail,
+    isPrivateCallAudioAuthorized,
   } = useCall();
 
   if (!activeCall) return null;
@@ -69,6 +70,7 @@ export function GlobalCallHost() {
         phase={phase}
         partnerName={partner.name}
         partnerAvatar={partner.photoUrl ?? ''}
+        audioAuthorized={isPrivateCallAudioAuthorized}
         onCancel={cancelCall}
         onEnd={endCall}
         onMediaConnected={reportMediaConnected}
