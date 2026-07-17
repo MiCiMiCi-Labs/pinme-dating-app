@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { getMatches, unmatch } from '../controllers/matches';
+import { getMatches, getMatchProfile, unmatch } from '../controllers/matches';
 import {
   getCallPreference,
   updateCallPreference,
@@ -13,6 +13,9 @@ router.use(requireAuth);
 
 // GET /api/v1/matches
 router.get('/', getMatches);
+
+// GET /api/v1/matches/:matchId/profile
+router.get('/:matchId/profile', getMatchProfile);
 
 // DELETE /api/v1/matches/:matchId  (soft delete via unmatchedAt)
 router.delete('/:matchId', unmatch);

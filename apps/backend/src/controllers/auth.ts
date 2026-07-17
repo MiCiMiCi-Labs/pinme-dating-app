@@ -70,24 +70,24 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
-    const userByAuthId = await prisma.user.findUnique({
+    const [userByAuthId, userByEmail, userByPhone] = await Promise.all([
+      prisma.user.findUnique({
         where: { supabaseAuthId: authUser.id },
         include: { profile: true },
-      });
-
-    const userByEmail = authEmail
-      ? await prisma.user.findUnique({
-          where: { email: authEmail },
-          include: { profile: true },
-        })
-      : null;
-
-    const userByPhone = authPhone
-      ? await prisma.user.findUnique({
-          where: { phone: authPhone },
-          include: { profile: true },
-        })
-      : null;
+      }),
+      authEmail
+        ? prisma.user.findUnique({
+            where: { email: authEmail },
+            include: { profile: true },
+          })
+        : Promise.resolve(null),
+      authPhone
+        ? prisma.user.findUnique({
+            where: { phone: authPhone },
+            include: { profile: true },
+          })
+        : Promise.resolve(null),
+    ]);
 
     const existingUser = userByAuthId ?? userByEmail ?? userByPhone;
 

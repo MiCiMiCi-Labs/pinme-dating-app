@@ -7,6 +7,7 @@ import { queryKeys } from './keys';
 export const DISCOVERY_PAGE_SIZE = 10;
 export const DISCOVERY_PREFETCH_THRESHOLD = 3;
 export const DISCOVERY_MAX_BUFFER = 30;
+export const DISCOVERY_CAUGHT_UP_STALE_TIME = 5 * 60_000;
 
 export function useDiscoveryFeed(enabled = true) {
   const accessToken = useAccessToken();
@@ -18,7 +19,7 @@ export function useDiscoveryFeed(enabled = true) {
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: Boolean(accessToken && userId && enabled),
-    staleTime: 30_000,
+    staleTime: DISCOVERY_CAUGHT_UP_STALE_TIME,
   });
 }
 

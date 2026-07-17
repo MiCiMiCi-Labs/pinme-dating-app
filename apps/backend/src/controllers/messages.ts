@@ -4,7 +4,6 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { supabase } from '../lib/supabase';
 import { CHAT_MEDIA_BUCKET, VOICE_BUCKET } from '../lib/storage';
-import { calculateChatIntimacy } from '../lib/intimacy';
 import { getBlockBetween } from '../lib/safety';
 import { notifyMessageReceived } from '../lib/notifications';
 
@@ -45,6 +44,14 @@ const reactionsInclude = {
 
 const RECALL_WINDOW_MS = 2 * 60 * 1000;
 const ALLOWED_EMOJIS = new Set(['❤️', '😂', '😮', '👍', '👎']);
+const DEFAULT_INTIMACY = {
+  level: 0,
+  label: 'New',
+  color: 'white',
+  score: 0,
+  mutualDays: 0,
+  currentStreakDays: 0,
+} as const;
 
 function parseDurationSec(raw: unknown): number | null {
   if (raw == null || raw === '') return null;
@@ -167,18 +174,13 @@ export async function getMessages(req: Request, res: Response) {
     const hasMore = messages.length > limit;
     const pageMessages = messages.slice(0, limit);
     const orderedMessages = pageMessages.reverse();
-    const intimacy = calculateChatIntimacy(
-      orderedMessages,
-      access.match.user1Id,
-      access.match.user2Id
-    );
     const nextCursor = hasMore && orderedMessages.length > 0
       ? orderedMessages[0].createdAt.toISOString()
       : null;
 
     res.json({
       messages: orderedMessages,
-      intimacy,
+      intimacy: DEFAULT_INTIMACY,
       nextCursor,
       hasMore,
     });

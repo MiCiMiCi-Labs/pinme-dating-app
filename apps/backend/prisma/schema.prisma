@@ -44,6 +44,8 @@ model User {
   callsAsCallee           Call[]                 @relation("CallCallee")
   voipDeviceTokens        VoipDeviceToken[]
 
+  @@index([createdAt, id])
+  @@index([gender, birthday, createdAt, id])
   @@map("users")
 }
 
@@ -89,6 +91,7 @@ model Profile {
   hiddenFields             String[]          @default([]) @map("hidden_fields")
   user                     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([height, userId])
   @@map("profiles")
 }
 
@@ -144,6 +147,7 @@ model Swipe {
   target    User        @relation("TargetSwipes", fields: [targetId], references: [id], onDelete: Cascade)
 
   @@unique([swiperId, targetId])
+  @@index([swiperId])
   @@index([targetId])
   @@index([targetId, action, createdAt])
   @@map("swipes")
@@ -214,6 +218,7 @@ model Block {
   blocker   User     @relation("BlockerBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
 
   @@unique([blockerId, blockedId])
+  @@index([blockerId])
   @@index([blockedId, blockerId])
   @@map("blocks")
 }
@@ -240,6 +245,7 @@ model PrivacySettings {
   showOnlineStatus Boolean @default(false) @map("show_online_status")
   user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([discoverable, userId])
   @@map("privacy_settings")
 }
 

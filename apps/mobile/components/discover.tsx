@@ -112,7 +112,7 @@ export function DiscoverCard({
       </View>
       <LinearGradient colors={['transparent', 'rgba(0,0,0,0.82)']} style={styles.cardGradient}>
         <Text style={styles.cardName}>{user.name}, {user.age}</Text>
-        <Text style={styles.cardRole}>{user.profile?.jobTitle ?? user.city ?? ''}</Text>
+        <Text style={styles.cardRole}>{user.jobTitle ?? user.city ?? ''}</Text>
       </LinearGradient>
       <Animated.View style={[styles.feedbackLike, { opacity: likeOpacity }]}>
         <Ionicons name="heart" size={42} color={colors.primary} />

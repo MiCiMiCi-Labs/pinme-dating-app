@@ -3,14 +3,14 @@ import { getMySubscription, redeemPromoCode } from '@/lib/api';
 import { useAccessToken, useAuthUserId } from './auth';
 import { queryKeys } from './keys';
 
-export function useMySubscription() {
+export function useMySubscription(enabled = true) {
   const accessToken = useAccessToken();
   const userId = useAuthUserId();
 
   return useQuery({
     queryKey: userId ? queryKeys.subscription(userId) : ['subscription', 'anonymous', 'me'],
     queryFn: () => getMySubscription(accessToken!),
-    enabled: Boolean(accessToken && userId),
+    enabled: Boolean(accessToken && userId && enabled),
     staleTime: 5 * 60_000,
   });
 }

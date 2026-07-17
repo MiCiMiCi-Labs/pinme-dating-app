@@ -104,14 +104,14 @@ export function useChatMatches() {
   });
 }
 
-export function useLikesPreview() {
+export function useLikesPreview(enabled = true) {
   const accessToken = useAccessToken();
   const userId = useAuthUserId();
 
   return useQuery({
     queryKey: userId ? queryKeys.likesPreview(userId) : ['likes', 'anonymous', 'preview'],
     queryFn: () => getLikesPreview(accessToken!),
-    enabled: Boolean(accessToken && userId),
+    enabled: Boolean(accessToken && userId && enabled),
     staleTime: 2 * 60_000,
   });
 }

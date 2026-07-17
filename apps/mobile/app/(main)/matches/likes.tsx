@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Alert,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -16,7 +17,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, MatchOverlay } from '@/components/discover';
 import { colors, IconButton, PillActionButton, RoundActionButton } from '@/design/system';
-import { type DiscoveryUser, type PublicUser } from '@/lib/api';
+import { isMatchLimitError, type DiscoveryUser, type PublicUser } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { useDislikeFromLikesList, useLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
 import { useMyPhotos } from '@/queries/profile.queries';
@@ -26,9 +27,21 @@ import { showToast } from '@/stores/toast.store';
 const SWIPE_THRESHOLD = 100;
 
 function toDiscoveryUser(user: PublicUser): DiscoveryUser {
+  const primaryPhoto = user.photos.find(photo => photo.isPrimary) ?? user.photos[0] ?? null;
+
   return {
-    ...user,
+    id: user.id,
+    name: user.name,
+    age: user.age,
+    city: user.city,
+    gender: user.gender,
     distanceKm: null,
+    jobTitle: user.profile?.jobTitle ?? null,
+    relationshipGoal: user.profile?.relationshipGoal ?? null,
+    height: user.profile?.height ?? null,
+    primaryPhoto,
+    photos: user.photos,
+    photoCount: user.photos.length,
   };
 }
 
@@ -102,6 +115,19 @@ export default function LikesYouScreen() {
         }
       },
       onError: (mutationError) => {
+        if (isMatchLimitError(mutationError)) {
+          Alert.alert(
+            'Match limit reached',
+            mutationError instanceof Error
+              ? mutationError.message
+              : 'Unmatch someone to keep matching.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Manage matches', onPress: () => router.push('/(main)/matches') },
+            ]
+          );
+          return;
+        }
         showToast(
           mutationError instanceof Error ? mutationError.message : 'Failed to match',
           'error'
@@ -135,9 +161,18 @@ export default function LikesYouScreen() {
         const user = currentUserRef.current;
         if (Math.abs(gesture.dx) < 8 && Math.abs(gesture.dy) < 8) {
           if (user) {
+            const primary = user.photos.find(photo => photo.isPrimary) ?? user.photos[0];
             router.push({
               pathname: '/(main)/matches/[userId]',
-              params: { userId: user.id, source: 'likes' },
+              params: {
+                userId: user.id,
+                source: 'likes',
+                name: user.name,
+                age: String(user.age),
+                city: user.city ?? '',
+                gender: user.gender,
+                photoUrl: primary ? getDisplayPhotoUrl(primary, 'thumbnail') : '',
+              },
             });
           }
           Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();

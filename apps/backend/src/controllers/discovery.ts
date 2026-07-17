@@ -1,8 +1,7 @@
-import { Prisma } from '@prisma/client';
+import { Gender, Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
 import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
-import { sanitizePublicProfile } from '../lib/publicProfile';
 
 function calculateDistanceKm(
   from: { latitude: number; longitude: number },
@@ -57,7 +56,49 @@ function encodeCursor(data: { createdAt: string; id: string }): string {
   return Buffer.from(JSON.stringify(data)).toString('base64url');
 }
 
+function createTimingLogger(label: string, thresholdMs = 1000) {
+  const start = Date.now();
+  let previous = start;
+  const marks: Array<{ label: string; totalMs: number; stepMs: number }> = [];
+
+  return {
+    mark(stepLabel: string) {
+      const now = Date.now();
+      marks.push({
+        label: stepLabel,
+        totalMs: now - start,
+        stepMs: now - previous,
+      });
+      previous = now;
+    },
+    flush(extra?: Record<string, unknown>) {
+      const totalMs = Date.now() - start;
+      if (totalMs < thresholdMs) return;
+
+      console.warn(`[timing] ${label} total=${totalMs}ms`, {
+        ...extra,
+        steps: marks,
+      });
+    },
+  };
+}
+
+type DiscoveryContextRow = {
+  id: string;
+  preferredGender: Gender | null;
+  minAge: number | null;
+  maxAge: number | null;
+  maxDistanceKm: number | null;
+  minHeight: number | null;
+  maxHeight: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  excludedUserIds: string[];
+};
+
 export async function getDiscoveryFeed(req: Request, res: Response) {
+  const timing = createTimingLogger('GET /api/v1/discovery');
+
   try {
     const limit = parseLimit(req.query.limit);
     const cursorParam =
@@ -72,31 +113,68 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         return;
       }
     }
+    timing.mark('parse query');
 
-    const currentUser = await prisma.user.findUnique({
-      where: { supabaseAuthId: req.userId! },
-      include: {
-        preferences: true,
-        location: true,
-        swipesGiven: { select: { targetId: true } },
-        blocksGiven: { select: { blockedId: true } },
-        blocksReceived: { select: { blockerId: true } },
-      },
-    });
+    const [currentUser] = await prisma.$queryRaw<DiscoveryContextRow[]>`
+      SELECT
+        u.id::text AS id,
+        p.preferred_gender AS "preferredGender",
+        p.min_age AS "minAge",
+        p.max_age AS "maxAge",
+        p.max_distance_km AS "maxDistanceKm",
+        p.min_height AS "minHeight",
+        p.max_height AS "maxHeight",
+        l.latitude,
+        l.longitude,
+        (
+          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT s.target_id::text), NULL), ARRAY[]::text[]) ||
+          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT bg.blocked_id::text), NULL), ARRAY[]::text[]) ||
+          COALESCE(ARRAY_REMOVE(ARRAY_AGG(DISTINCT br.blocker_id::text), NULL), ARRAY[]::text[])
+        ) AS "excludedUserIds"
+      FROM users u
+      LEFT JOIN preferences p ON p.user_id = u.id
+      LEFT JOIN locations l ON l.user_id = u.id
+      LEFT JOIN swipes s ON s.swiper_id = u.id
+      LEFT JOIN blocks bg ON bg.blocker_id = u.id
+      LEFT JOIN blocks br ON br.blocked_id = u.id
+      WHERE u."supabaseAuthId" = ${req.userId!}
+      GROUP BY
+        u.id,
+        p.preferred_gender,
+        p.min_age,
+        p.max_age,
+        p.max_distance_km,
+        p.min_height,
+        p.max_height,
+        l.latitude,
+        l.longitude
+      LIMIT 1
+    `;
+    timing.mark('load current user context');
 
     if (!currentUser) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
+    const preferences = {
+      preferredGender: currentUser.preferredGender,
+      minAge: currentUser.minAge,
+      maxAge: currentUser.maxAge,
+      maxDistanceKm: currentUser.maxDistanceKm,
+      minHeight: currentUser.minHeight,
+      maxHeight: currentUser.maxHeight,
+    };
+    const currentLocation =
+      currentUser.latitude != null && currentUser.longitude != null
+        ? { latitude: currentUser.latitude, longitude: currentUser.longitude }
+        : null;
+
     const excludedUserIds = new Set<string>([
       currentUser.id,
-      ...currentUser.swipesGiven.map((swipe) => swipe.targetId),
-      ...currentUser.blocksGiven.map((block) => block.blockedId),
-      ...currentUser.blocksReceived.map((block) => block.blockerId),
+      ...(currentUser.excludedUserIds ?? []),
     ]);
 
-    const preferences = currentUser.preferences;
     const where: Prisma.UserWhereInput = {
       id: { notIn: Array.from(excludedUserIds) },
       profile: { isNot: null },
@@ -158,13 +236,34 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         },
       ];
     }
+    timing.mark('build filters');
 
-    const bufferSize = limit * 4;
+    const bufferSize = Math.min(limit * 2, 20);
     const candidates = await prisma.user.findMany({
       where,
-      include: {
-        profile: true,
+      select: {
+        id: true,
+        name: true,
+        gender: true,
+        birthday: true,
+        city: true,
+        createdAt: true,
+        profile: {
+          select: {
+            jobTitle: true,
+            relationshipGoal: true,
+            height: true,
+          },
+        },
         photos: {
+          select: {
+            id: true,
+            url: true,
+            thumbnailUrl: true,
+            isPrimary: true,
+            isVerified: true,
+            orderIndex: true,
+          },
           orderBy: [{ isPrimary: 'desc' }, { orderIndex: 'asc' }],
         },
         location: true,
@@ -173,12 +272,13 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: bufferSize,
     });
+    timing.mark('load candidates');
 
     const scored = candidates.map((candidate) => {
       const age = calculateAge(candidate.birthday);
       const distanceKm =
-        currentUser.location && candidate.location
-          ? calculateDistanceKm(currentUser.location, candidate.location)
+        currentLocation && candidate.location
+          ? calculateDistanceKm(currentLocation, candidate.location)
           : null;
 
       return { candidate, age, distanceKm };
@@ -197,20 +297,25 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         if (selected.length === limit) break;
       }
     }
+    timing.mark('score and filter');
 
     const users = selected.map(({ candidate, age, distanceKm }) => ({
       id: candidate.id,
       name: candidate.name,
       gender: candidate.gender,
-      bio: candidate.bio,
       city: candidate.city,
       age,
       distanceKm: candidate.privacySettings?.showDistance
         ? fuzzyDistance(distanceKm)
         : null,
-      profile: sanitizePublicProfile(candidate.profile),
+      jobTitle: candidate.profile?.jobTitle ?? null,
+      relationshipGoal: candidate.profile?.relationshipGoal ?? null,
+      height: candidate.profile?.height ?? null,
+      primaryPhoto: candidate.photos[0] ?? null,
       photos: candidate.photos,
+      photoCount: candidate.photos.length,
     }));
+    timing.mark('map response');
 
     let nextCursor: string | null = null;
 
@@ -238,9 +343,19 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
         id: lastDbCandidate.id,
       });
     }
+    timing.mark('build cursor');
+    timing.flush({
+      limit,
+      cursor: Boolean(cursor),
+      excludedCount: excludedUserIds.size,
+      candidateCount: candidates.length,
+      selectedCount: selected.length,
+      nextCursor: Boolean(nextCursor),
+    });
 
     res.json({ users, nextCursor });
-  } catch {
+  } catch (error) {
+    console.error('[getDiscoveryFeed] error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }

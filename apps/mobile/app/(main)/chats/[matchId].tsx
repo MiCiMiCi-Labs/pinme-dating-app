@@ -3,6 +3,7 @@ import { Audio, ResizeMode, Video } from 'expo-av';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -37,6 +38,7 @@ import {
   sendVoiceMessage,
   toggleReaction,
   type ChatIntimacy,
+  type ChatMatch,
   type ChatMessagesResponse,
   type ChatMessage,
   type Reaction,
@@ -50,6 +52,7 @@ import { STICKERS } from '@/lib/stickers';
 import { readCachedThread, writeCachedThread } from '@/lib/chatMessageCache';
 import { useAccessToken, useAuthUserId } from '@/queries/auth';
 import { useChatMatches, useMessages } from '@/queries/chat.queries';
+import { queryKeys } from '@/queries/keys';
 import { useCurrentUser } from '@/queries/user.queries';
 import { GifBubble } from '@/components/chat/GifBubble';
 import { ImageBubble } from '@/components/chat/ImageBubble';
@@ -67,7 +70,7 @@ import {
 import { showToast } from '@/stores/toast.store';
 import { markVoiceRoomNeedsRefresh } from '@/stores/voiceRoom.store';
 
-const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 15000;
+const MESSAGE_SAFETY_SYNC_INTERVAL_MS = 5000;
 const REALTIME_FALLBACK_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED']);
 const RECALL_WINDOW_MS = 2 * 60 * 1000;
 const REACTION_EMOJIS = ['❤️', '😂', '😮', '👍', '👎'] as const;
@@ -281,6 +284,7 @@ export default function ChatRoomScreen() {
   const [videoPlayer, setVideoPlayer] = useState<string | null>(null);
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
   const [dismissedInvitations, setDismissedInvitations] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
   const accessToken = useAccessToken();
   const authUserId = useAuthUserId();
   const { data: currentUserData, refetch: refetchCurrentUser } = useCurrentUser();
@@ -298,6 +302,60 @@ export default function ChatRoomScreen() {
   const matchedUserId = routeUserId ?? (Array.isArray(chatMatches)
     ? chatMatches.find(match => match.matchId === matchId)?.user.id
     : undefined);
+
+  const updateChatPreviewCache = useCallback((message: ChatMessage) => {
+    if (!authUserId || !matchId) return;
+
+    queryClient.setQueryData<ChatMatch[]>(queryKeys.chatMatches(authUserId), old => {
+      if (!Array.isArray(old)) return old;
+
+      const existing = old.find(item => item.matchId === matchId);
+      if (!existing) return old;
+
+      const existingLastTime = existing.lastMessage
+        ? new Date(existing.lastMessage.createdAt).getTime()
+        : 0;
+      const nextMessageTime = new Date(message.createdAt).getTime();
+      const updatesCurrentLastMessage = existing.lastMessage?.id === message.id;
+
+      if (!updatesCurrentLastMessage && existingLastTime > nextMessageTime) {
+        return old;
+      }
+
+      const nextMatch: ChatMatch = {
+        ...existing,
+        lastMessage: message,
+        unreadCount: 0,
+      };
+
+      return [
+        nextMatch,
+        ...old.filter(item => item.matchId !== matchId),
+      ];
+    });
+  }, [authUserId, matchId, queryClient]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCachedThread() {
+      if (!authUserId || !matchId || messagesRef.current.length > 0) return;
+
+      const cached = await readCachedThread(authUserId, matchId);
+      if (!cached || cancelled) return;
+
+      setMessages(cached.messages);
+      if (cached.intimacy) setIntimacy(cached.intimacy);
+      setLoading(false);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+    }
+
+    loadCachedThread();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId, matchId]);
 
   const loadThread = useCallback(async (showLoading = true) => {
     if (!matchId) {
@@ -340,6 +398,10 @@ export default function ChatRoomScreen() {
       }
 
       setIntimacy(loadedIntimacy);
+      const latestMessage = loadedMessages[loadedMessages.length - 1];
+      if (latestMessage) {
+        updateChatPreviewCache(latestMessage);
+      }
       setMessages(current => {
         const serverConfirmed = current.filter(m => !m._status);
         if (messagesAreEqual(serverConfirmed, loadedMessages)) return current;
@@ -361,33 +423,11 @@ export default function ChatRoomScreen() {
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
       }
     }
-  }, [accessToken, authUserId, currentUserData, matchId, refetchCurrentUser, refetchMessages]);
+  }, [accessToken, authUserId, currentUserData, matchId, refetchCurrentUser, refetchMessages, updateChatPreviewCache]);
 
   useEffect(() => {
     loadThread();
   }, [loadThread]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadCachedThread() {
-      if (!authUserId || !matchId || messagesRef.current.length > 0) return;
-
-      const cached = await readCachedThread(authUserId, matchId);
-      if (!cached || cancelled) return;
-
-      setMessages(cached.messages);
-      if (cached.intimacy) setIntimacy(cached.intimacy);
-      setLoading(false);
-      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
-    }
-
-    loadCachedThread();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authUserId, matchId]);
 
   useEffect(() => {
     if (!matchId) return;
@@ -481,6 +521,7 @@ export default function ChatRoomScreen() {
           },
           (payload) => {
             const row = payload.new as RealtimeMessageRow;
+            const message = mapRealtimeMessage(row, messagesRef.current);
             logRealtimeStatus(activeMatchId, `INSERT ${row.id}`);
             registerIncomingMessage({
               matchId: activeMatchId,
@@ -488,7 +529,8 @@ export default function ChatRoomScreen() {
               senderId: row.sender_id,
               createdAt: row.created_at,
             });
-            setMessages(current => mergeMessage(current, mapRealtimeMessage(row, current)));
+            updateChatPreviewCache(message);
+            setMessages(current => mergeMessage(current, message));
             requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
             // If the replied-to message isn't loaded locally, do a silent refresh to get replyTo data
@@ -516,8 +558,10 @@ export default function ChatRoomScreen() {
           },
           (payload) => {
             const row = payload.new as RealtimeMessageRow;
+            const message = mapRealtimeMessage(row, messagesRef.current);
             logRealtimeStatus(activeMatchId, `UPDATE ${row.id}`);
-            setMessages(current => mergeMessage(current, mapRealtimeMessage(row, current)));
+            updateChatPreviewCache(message);
+            setMessages(current => mergeMessage(current, message));
             if (row.recalled_at) {
               loadThread(false);
             }
@@ -529,7 +573,7 @@ export default function ChatRoomScreen() {
 
           if (status === 'SUBSCRIBED') {
             setError(null);
-            stopSafetySync();
+            ensureSafetySync();
           }
 
           if (REALTIME_FALLBACK_STATUSES.has(status)) {
@@ -547,6 +591,7 @@ export default function ChatRoomScreen() {
         if (wasBackground) {
           loadThread(false);
         }
+        ensureSafetySync();
       } else {
         stopSafetySync();
       }
@@ -562,7 +607,7 @@ export default function ChatRoomScreen() {
       }
       stopSafetySync();
     };
-  }, [loadThread, matchId]);
+  }, [loadThread, matchId, updateChatPreviewCache]);
 
   const handleSend = async () => {
     const content = draft.trim();
@@ -608,6 +653,7 @@ export default function ChatRoomScreen() {
       const { message } = await sendMessage(session.access_token, matchId, content, pendingReplyTo?.id);
       retryPayloads.current.delete(tempId);
       clearPendingMessage(tempId);
+      updateChatPreviewCache(message);
       setMessages(current => mergeMessage(current.filter(item => item.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch {
@@ -776,6 +822,7 @@ export default function ChatRoomScreen() {
 
       const { message } = await sendVoiceMessage(session.access_token, matchId, uri, duration, pendingReplyTo?.id);
       retryPayloads.current.delete(tempId);
+      updateChatPreviewCache(message);
       setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch {
@@ -890,6 +937,7 @@ export default function ChatRoomScreen() {
         : await sendImageMessage(session.access_token, matchId, asset.uri, mimeType, pendingReplyTo?.id);
 
       retryPayloads.current.delete(tempId);
+      updateChatPreviewCache(message);
       setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch {
@@ -952,6 +1000,7 @@ export default function ChatRoomScreen() {
       }
 
       retryPayloads.current.delete(tempId);
+      updateChatPreviewCache(message);
       setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch {
@@ -974,6 +1023,7 @@ export default function ChatRoomScreen() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Please log in again.');
       const { message } = await toggleReaction(session.access_token, matchId, messageId, emoji);
+      updateChatPreviewCache(message);
       setMessages(current => mergeMessage(current, message));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update reaction');
@@ -1018,6 +1068,7 @@ export default function ChatRoomScreen() {
       if (!session?.access_token) throw new Error('Please log in again.');
       const { message } = await sendGifMessage(session.access_token, matchId, url, pendingReplyTo?.id);
       retryPayloads.current.delete(tempId);
+      updateChatPreviewCache(message);
       setMessages(current => mergeMessage(current.filter(m => m.id !== tempId), message));
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
     } catch {

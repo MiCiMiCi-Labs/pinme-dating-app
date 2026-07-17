@@ -1,8 +1,9 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Alert,
   PanResponder,
   StyleSheet,
   Text,
@@ -11,17 +12,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DiscoverCard, DiscoverySkeleton, FilterSheet, MatchOverlay, SwipeActions } from '@/components/discover';
-import { colors, IconButton, PrimaryButton, ScreenTitle } from '@/design/system';
-import { type DiscoveryUser } from '@/lib/api';
+import { colors, IconButton, ScreenTitle } from '@/design/system';
+import { isMatchLimitError, type DiscoveryUser } from '@/lib/api';
 import { cacheDiscoveryUsers } from '@/lib/discovery-cache';
-import {
-  getDetailedProfileCompletion,
-  matchingProfileCompletionThreshold,
-} from '@/lib/profileCompleteness';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
-import { useCurrentUser } from '@/queries/user.queries';
-import { useMyPhotos } from '@/queries/profile.queries';
 import {
   DISCOVERY_MAX_BUFFER,
   DISCOVERY_PAGE_SIZE,
@@ -39,7 +34,6 @@ import {
   setDiscoverySwipeLocked,
 } from '@/stores/discoveryUi.store';
 import { registerMatchSuccess } from '@/stores/matchEvents.store';
-import { setProfileCompletion } from '@/stores/profileCompletion.store';
 
 const SWIPE_THRESHOLD = 100;
 
@@ -56,24 +50,11 @@ export default function SwipeScreen() {
   const swipingRef = useRef(false);
   const currentUserRef = useRef<DiscoveryUser | null>(null);
   const handleSwipeRef = useRef<(dir: 'like' | 'nope') => void>(() => {});
-  const currentUserQuery = useCurrentUser();
-  const photosQuery = useMyPhotos();
-  const completion = useMemo(() => {
-    if (!currentUserQuery.data?.user || !photosQuery.data) return null;
-    return getDetailedProfileCompletion(currentUserQuery.data.user, photosQuery.data);
-  }, [currentUserQuery.data?.user, photosQuery.data]);
-  const canDiscover = Boolean(completion && completion.percent >= matchingProfileCompletionThreshold);
-  const feedQuery = useDiscoveryFeed(canDiscover);
+  const feedQuery = useDiscoveryFeed(true);
   const resetFeed = useResetDiscoveryFeed();
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = feedQuery;
   const swipeMutation = useCreateSwipe();
-  const myPhotoUrl = useMemo(() => {
-    const photos = photosQuery.data ?? [];
-    const primary = photos.find(p => p.isPrimary) ?? photos[0];
-    return primary ? getDisplayPhotoUrl(primary, 'thumbnail') : null;
-  }, [photosQuery.data]);
-  const loading = currentUserQuery.isLoading || photosQuery.isLoading || (canDiscover && feedQuery.isLoading);
-  const profileCompletionPercent = completion?.percent ?? null;
+  const loading = feedQuery.isLoading;
 
   const currentUser = users[currentIndex] ?? null;
   currentUserRef.current = currentUser;
@@ -99,16 +80,6 @@ export default function SwipeScreen() {
   }, [pan]);
 
   useEffect(() => {
-    if (!completion) return;
-    setProfileCompletion(completion);
-  }, [completion]);
-
-  useEffect(() => {
-    if (!canDiscover) {
-      setUsers([]);
-      setCurrentIndex(0);
-      return;
-    }
     const pages = feedQuery.data?.pages;
     if (!pages) return;
 
@@ -123,15 +94,15 @@ export default function SwipeScreen() {
     if (currentIndex >= nextUsers.length) {
       setCurrentIndex(Math.max(0, nextUsers.length - 1));
     }
-  }, [canDiscover, currentIndex, feedQuery.data?.pages]);
+  }, [currentIndex, feedQuery.data?.pages]);
 
   useEffect(() => {
-    if (!canDiscover || !feedQuery.hasNextPage || feedQuery.isFetchingNextPage) return;
+    if (!feedQuery.hasNextPage || feedQuery.isFetchingNextPage) return;
     const remaining = users.length - currentIndex - 1;
     if (remaining <= DISCOVERY_PREFETCH_THRESHOLD) {
       feedQuery.fetchNextPage().catch(() => null);
     }
-  }, [canDiscover, currentIndex, feedQuery, users.length]);
+  }, [currentIndex, feedQuery, users.length]);
 
   useEffect(() => {
     const nextUser = users[currentIndex + 1];
@@ -180,8 +151,19 @@ export default function SwipeScreen() {
         setMatchedUser(user);
         setMatchedMatchId(match.id);
       }
-    } catch (_) {
-      // non-blocking — card already advanced
+    } catch (error) {
+      if (isMatchLimitError(error)) {
+        Alert.alert(
+          'Match limit reached',
+          error instanceof Error
+            ? error.message
+            : 'Unmatch someone to keep discovering new people.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Manage matches', onPress: () => router.push('/(main)/matches') },
+          ]
+        );
+      }
     }
   }, [currentIndex, pan, swipeMutation]);
 
@@ -210,9 +192,18 @@ export default function SwipeScreen() {
       onPanResponderRelease: (_, gesture) => {
         if (Math.abs(gesture.dx) < 8 && Math.abs(gesture.dy) < 8) {
           if (currentUserRef.current) {
+            const user = currentUserRef.current;
+            const primaryPhoto = user.photos.find(photo => photo.isPrimary) ?? user.photos[0];
             router.push({
               pathname: '/(main)/discover/[userId]',
-              params: { userId: currentUserRef.current.id },
+              params: {
+                userId: user.id,
+                name: user.name,
+                age: String(user.age),
+                city: user.city ?? '',
+                gender: user.gender,
+                photoUrl: primaryPhoto ? getDisplayPhotoUrl(primaryPhoto, 'thumbnail') : '',
+              },
             });
           }
           Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
@@ -246,17 +237,6 @@ export default function SwipeScreen() {
       <View style={[styles.deck, { height: cardHeight + 38 }]}>
         {loading ? (
           <DiscoverySkeleton height={cardHeight} />
-        ) : profileCompletionPercent !== null &&
-          profileCompletionPercent < matchingProfileCompletionThreshold ? (
-          <View style={styles.lockedState}>
-            <Text style={styles.emptyTitle}>Complete your profile first</Text>
-            <Text style={styles.emptySubtext}>
-              Your profile is {profileCompletionPercent}% complete. Reach {matchingProfileCompletionThreshold}% to start matching.
-            </Text>
-            <PrimaryButton onPress={() => router.push('/(main)/profile')} style={styles.lockedButton}>
-              Improve profile
-            </PrimaryButton>
-          </View>
         ) : !currentUser && feedQuery.isFetchingNextPage ? (
           <DiscoverySkeleton height={cardHeight} />
         ) : !currentUser ? (
@@ -284,13 +264,10 @@ export default function SwipeScreen() {
         )}
       </View>
 
-      {profileCompletionPercent === null ||
-      profileCompletionPercent >= matchingProfileCompletionThreshold ? (
-        <SwipeActions
-          onNope={() => animateSwipe('nope')}
-          onLike={() => animateSwipe('like')}
-        />
-      ) : null}
+      <SwipeActions
+        onNope={() => animateSwipe('nope')}
+        onLike={() => animateSwipe('like')}
+      />
 
       {filterOpen ? (
         <FilterSheet
@@ -307,7 +284,7 @@ export default function SwipeScreen() {
       {matchedUser ? (
         <MatchOverlay
           matchedUser={matchedUser}
-          myPhotoUrl={myPhotoUrl}
+          myPhotoUrl={null}
           onKeepSwiping={() => {
             setMatchedUser(null);
             setMatchedMatchId(null);
@@ -357,15 +334,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 40,
     gap: 10,
-  },
-  lockedState: {
-    alignItems: 'center',
-    paddingHorizontal: 34,
-    gap: 12,
-  },
-  lockedButton: {
-    alignSelf: 'stretch',
-    marginTop: 8,
   },
   emptyTitle: {
     color: colors.text,

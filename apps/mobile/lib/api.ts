@@ -189,12 +189,21 @@ export type ReportInput = {
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+export function isMatchLimitError(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    (error.code === 'MATCH_LIMIT_REACHED' || error.code === 'TARGET_MATCH_LIMIT_REACHED')
+  );
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -207,7 +216,13 @@ async function parseResponse<T>(response: Response): Promise<T> {
         : data && typeof data === 'object' && 'error' in data
           ? String(data.error)
         : 'Request failed';
-    throw new ApiError(message, response.status);
+    const code =
+      data && typeof data === 'object' && 'code' in data
+        ? String(data.code)
+        : data && typeof data === 'object' && 'errorCode' in data
+          ? String(data.errorCode)
+          : undefined;
+    throw new ApiError(message, response.status, code);
   }
 
   return data as T;
@@ -607,12 +622,15 @@ export type DiscoveryUser = {
   id: string;
   name: string;
   age: number;
-  bio: string | null;
   city: string | null;
   distanceKm: string | null;
   gender: string;
-  profile: AppProfile | null;
+  jobTitle: string | null;
+  relationshipGoal: RelationshipGoal | null;
+  height: number | null;
+  primaryPhoto: Photo | null;
   photos: Photo[];
+  photoCount: number;
 };
 
 export type DiscoveryFeedResponse = {
@@ -645,6 +663,13 @@ export type PublicUser = {
 
 export async function getUserById(accessToken: string, userId: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ user: PublicUser }>(response);
+}
+
+export async function getMatchProfile(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}/profile`, {
     headers: authHeaders(accessToken),
   });
   return parseResponse<{ user: PublicUser }>(response);
@@ -990,8 +1015,8 @@ export async function failCall(accessToken: string, callId: string, failureReaso
   return parseResponse<CallSummary>(response);
 }
 
-export async function getMatches(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
+export async function getMatches(accessToken: string, limit = 20) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches?limit=${limit}`, {
     headers: authHeaders(accessToken),
   });
   const data = await parseResponse<MatchSummary[] | { matches?: MatchSummary[] }>(response);
@@ -1000,8 +1025,8 @@ export async function getMatches(accessToken: string) {
   return [];
 }
 
-export async function getChatMatches(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/chats`, {
+export async function getChatMatches(accessToken: string, limit = 20) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/chats?limit=${limit}`, {
     headers: authHeaders(accessToken),
   });
   const data = await parseResponse<ChatMatch[] | { chats?: ChatMatch[]; matches?: ChatMatch[] }>(response);

@@ -39,49 +39,66 @@ function serializePublicUser(user: {
 
 export async function getUserById(req: Request, res: Response) {
   try {
+    const startedAt = performance.now();
+    const timings: Array<{ label: string; totalMs: number; stepMs: number }> = [];
+    let lastMark = startedAt;
+    const mark = (label: string) => {
+      if (!process.env.LOG_DISCOVERY_TIMING && process.env.NODE_ENV === 'production') return;
+      const now = performance.now();
+      timings.push({
+        label,
+        totalMs: Math.round(now - startedAt),
+        stepMs: Math.round(now - lastMark),
+      });
+      lastMark = now;
+    };
+
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
 
     if (!id || !UUID_SHAPE.test(id)) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
+    mark('parse id');
 
-    const currentUser = await prisma.user.findUnique({
-      where: { supabaseAuthId: req.userId! },
-      select: { id: true },
-    });
+    const [currentUser, target] = await Promise.all([
+      prisma.user.findUnique({
+        where: { supabaseAuthId: req.userId! },
+        select: { id: true },
+      }),
+      prisma.user.findUnique({
+        where: { id },
+        select: {
+          ...publicUserSelect,
+          privacySettings: { select: { discoverable: true } },
+        },
+      }),
+    ]);
+    mark('load current and target');
 
     if (!currentUser) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    // Viewing your own profile is always allowed and skips every other check.
-    if (currentUser.id === id) {
-      const self = await prisma.user.findUnique({ where: { id }, select: publicUserSelect });
-      if (!self) {
-        res.status(404).json({ error: 'User not found' });
-        return;
-      }
-      res.json({ user: serializePublicUser(self) });
-      return;
-    }
-
-    const target = await prisma.user.findUnique({
-      where: { id },
-      select: {
-        ...publicUserSelect,
-        privacySettings: { select: { discoverable: true } },
-      },
-    });
-
     if (!target) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
+    // Viewing your own profile is always allowed and skips every other check.
+    if (currentUser.id === id) {
+      mark('self allowed');
+      const { privacySettings: _privacySettings, ...self } = target;
+      console.log(`[timing] GET /api/v1/users/${id} total=${Math.round(performance.now() - startedAt)}ms`, { self: true, steps: timings });
+      res.json({ user: serializePublicUser(self) });
+      return;
+    }
+
     // Block takes priority over everything else, including an existing match.
-    if (await hasBlockBetween(currentUser.id, id)) {
+    const isBlocked = await hasBlockBetween(currentUser.id, id);
+    mark('check block');
+    if (isBlocked) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
@@ -99,6 +116,7 @@ export async function getUserById(req: Request, res: Response) {
         },
         select: { id: true },
       });
+      mark('check match for private target');
 
       if (!activeMatch) {
         res.status(404).json({ error: 'User not found' });
@@ -107,6 +125,7 @@ export async function getUserById(req: Request, res: Response) {
     }
 
     const { privacySettings: _privacySettings, ...publicTarget } = target;
+    console.log(`[timing] GET /api/v1/users/${id} total=${Math.round(performance.now() - startedAt)}ms`, { self: false, isDiscoverable, steps: timings });
     res.json({ user: serializePublicUser(publicTarget) });
   } catch {
     res.status(500).json({ error: 'Internal server error' });
