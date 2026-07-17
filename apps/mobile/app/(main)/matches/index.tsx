@@ -439,7 +439,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   card: {
-    flex: 1,
+    flexBasis: '48%',
+    flexGrow: 0,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: colors.line,
