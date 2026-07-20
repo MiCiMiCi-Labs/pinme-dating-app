@@ -8,7 +8,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_APNS_ENVIRONMENT": "SANDBOX"
+        "EXPO_PUBLIC_APNS_ENVIRONMENT": "PRODUCTION"
       }
     },
     "development-simulator": {

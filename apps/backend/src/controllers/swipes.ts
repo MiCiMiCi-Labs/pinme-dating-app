@@ -68,9 +68,18 @@ export async function createSwipe(req: Request, res: Response) {
 
     const targetExists = await prisma.user.findUnique({
       where: { id: targetId },
-      select: { id: true },
+      select: { id: true, privacySettings: { select: { discoverable: true } } },
     });
     if (!targetExists) {
+      res.status(404).json({ error: 'Target user not found' });
+      return;
+    }
+
+    // A client holding a stale/cached profile id (from before the target
+    // turned discoverability off) could otherwise still like/match them
+    // directly, bypassing the discovery feed's own filter entirely. Mirrors
+    // discovery.ts's fail-closed treatment of a missing privacySettings row.
+    if (targetExists.privacySettings?.discoverable !== true) {
       res.status(404).json({ error: 'Target user not found' });
       return;
     }

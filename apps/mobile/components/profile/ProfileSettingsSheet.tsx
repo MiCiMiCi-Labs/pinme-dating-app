@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { colors } from '@/design/system';
 
 type SettingsItem = {
@@ -17,6 +17,9 @@ type Props = {
   onManagePhotos: () => void;
   onBlockedUsers: () => void;
   onLogout: () => void;
+  onDeleteAccount: () => void;
+  showOnlineStatus: boolean;
+  onToggleShowOnlineStatus: (value: boolean) => void;
 };
 
 export const ProfileSettingsSheet = React.memo(function ProfileSettingsSheet({
@@ -25,6 +28,9 @@ export const ProfileSettingsSheet = React.memo(function ProfileSettingsSheet({
   onManagePhotos,
   onBlockedUsers,
   onLogout,
+  onDeleteAccount,
+  showOnlineStatus,
+  onToggleShowOnlineStatus,
 }: Props) {
   const items: SettingsItem[] = [
     {
@@ -46,6 +52,13 @@ export const ProfileSettingsSheet = React.memo(function ProfileSettingsSheet({
       destructive: true,
       onPress: onLogout,
     },
+    {
+      icon: 'trash-outline',
+      label: 'Delete account',
+      helper: 'Permanently delete your account and all your data.',
+      destructive: true,
+      onPress: onDeleteAccount,
+    },
   ];
 
   return (
@@ -65,6 +78,29 @@ export const ProfileSettingsSheet = React.memo(function ProfileSettingsSheet({
           </View>
 
           <View style={styles.list}>
+            <View style={styles.item}>
+              <View style={styles.itemIcon}>
+                <Ionicons
+                  name={showOnlineStatus ? 'radio-button-on-outline' : 'eye-off-outline'}
+                  size={20}
+                  color={colors.text}
+                />
+              </View>
+              <View style={styles.itemText}>
+                <Text style={styles.itemLabel}>Show online status</Text>
+                <Text style={styles.itemHelper}>
+                  {showOnlineStatus
+                    ? 'Matches can see when you are online.'
+                    : "You're invisible — no one sees you as online."}
+                </Text>
+              </View>
+              <Switch
+                value={showOnlineStatus}
+                onValueChange={onToggleShowOnlineStatus}
+                trackColor={{ false: '#E4E4EA', true: '#F5B8C1' }}
+                thumbColor={showOnlineStatus ? colors.primary : '#FFFFFF'}
+              />
+            </View>
             {items.map(item => (
               <Pressable
                 key={item.label}

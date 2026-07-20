@@ -18,6 +18,7 @@ import {
   type LiveKitCredentials,
 } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
+import { markChatNeedsRefresh } from '@/stores/chatEvents.store';
 import { showToast } from '@/stores/toast.store';
 import { useAccessToken, useAuthUserId } from '@/queries/auth';
 import { useCurrentUser } from '@/queries/user.queries';
@@ -604,6 +605,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
       const toast = terminalToastFor(call);
       if (toast) showToast(toast.message, toast.type);
+
+      // The server records a SYSTEM message for this call's outcome (see
+      // recordCallOutcomeMessage in apps/backend/src/lib/calls.ts), but
+      // nothing else on this device will have observed that insert unless
+      // this match's chat screen happens to already be open (its own
+      // Realtime subscription is what normally drives chatNeedsRefresh —
+      // see registerIncomingMessage). Every call this device is a party to
+      // reaches applyTerminalOutcome regardless of which screen is open, so
+      // this is the one place that can reliably tell the chat list to
+      // refresh and pick up the new last-message/unread state.
+      markChatNeedsRefresh(call.matchId);
 
       if (terminalTimerRef.current) clearTimeout(terminalTimerRef.current);
       terminalTimerRef.current = setTimeout(resetToIdle, TERMINAL_DISPLAY_MS);

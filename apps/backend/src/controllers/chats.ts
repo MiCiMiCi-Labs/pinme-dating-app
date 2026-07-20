@@ -54,6 +54,7 @@ type ChatListRow = {
   sender_id: string | null;
   sender_name: string | null;
   unread_count: number;
+  is_online: boolean;
 };
 
 export async function getChats(req: Request, res: Response) {
@@ -90,13 +91,23 @@ export async function getChats(req: Request, res: Response) {
         last_message.created_at AS last_message_created_at,
         sender.id AS sender_id,
         sender.name AS sender_name,
-        COALESCE(unread.unread_count, 0)::int AS unread_count
+        COALESCE(unread.unread_count, 0)::int AS unread_count,
+        -- 2 minutes: matches the mobile heartbeat ping interval (see
+        -- apps/mobile's root-layout heartbeat hook) with slack for a couple
+        -- of missed/delayed pings before falling back to "offline". Also
+        -- respects the other user's showOnlineStatus privacy toggle.
+        COALESCE(
+          COALESCE(other_privacy.show_online_status, false)
+            AND other_user.last_active_at > NOW() - INTERVAL '2 minutes',
+          false
+        ) AS is_online
       FROM matches m
       JOIN users other_user
         ON other_user.id = CASE
           WHEN m.user1_id = ${dbUserId} THEN m.user2_id
           ELSE m.user1_id
         END
+      LEFT JOIN privacy_settings other_privacy ON other_privacy.user_id = other_user.id
       LEFT JOIN LATERAL (
         SELECT
           p.id,
@@ -130,12 +141,12 @@ export async function getChats(req: Request, res: Response) {
         SELECT COUNT(*) AS unread_count
         FROM messages unread_msg
         WHERE unread_msg.match_id = m.id
-          AND unread_msg.sender_id <> ${dbUserId}
+          AND unread_msg.sender_id IS DISTINCT FROM ${dbUserId}
           AND unread_msg.is_read = false
       ) unread ON true
       WHERE m.unmatched_at IS NULL
         AND (m.user1_id = ${dbUserId} OR m.user2_id = ${dbUserId})
-      ORDER BY m.created_at DESC
+      ORDER BY COALESCE(last_message.created_at, m.created_at) DESC
       LIMIT ${limit};
     `;
 
@@ -167,6 +178,7 @@ export async function getChats(req: Request, res: Response) {
         bio: null,
         city: row.city,
         age: calculateAge(row.birthday),
+        isOnline: row.is_online,
         photos: row.photo_id
           ? [{
               id: row.photo_id,

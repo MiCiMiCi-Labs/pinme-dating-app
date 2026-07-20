@@ -1,5 +1,4 @@
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { ReactNode } from 'react';
@@ -257,35 +256,18 @@ export function ScreenTitle({
 
 export function LogoMark({ size = 104 }: { size?: number }) {
   return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <LinearGradient
-        colors={['#F36D35', '#EF3D63', '#8F2DA8']}
-        start={{ x: 0, y: 1 }}
-        end={{ x: 1, y: 0 }}
-        style={[styles.logoCircle, { width: size * 0.68, height: size * 0.68 }]}
-      />
-      <View
-        style={[
-          styles.logoCut,
-          {
-            width: size * 0.38,
-            height: size * 0.58,
-            borderRadius: size * 0.24,
-            left: size * 0.24,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.logoCut,
-          {
-            width: size * 0.22,
-            height: size * 0.42,
-            borderRadius: size * 0.16,
-            left: size * 0.48,
-            top: size * 0.3,
-          },
-        ]}
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size * 0.22,
+        overflow: 'hidden',
+      }}
+    >
+      <Image
+        source={require('../assets/brand/pinme-logo-final.png')}
+        style={{ width: size, height: size }}
+        contentFit="cover"
       />
     </View>
   );
@@ -439,16 +421,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  logoCircle: {
-    borderRadius: 999,
-    transform: [{ rotate: '-18deg' }],
-  },
-  logoCut: {
-    position: 'absolute',
-    top: 22,
-    backgroundColor: '#FFFFFF',
-    transform: [{ rotate: '22deg' }],
   },
   pill: {
     minHeight: 46,

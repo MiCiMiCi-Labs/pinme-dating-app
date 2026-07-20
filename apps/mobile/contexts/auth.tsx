@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { AppState } from 'react-native';
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import {
   ApiError,
   getMyProfile,
+  sendHeartbeat,
   type AppProfile,
   type AppUser,
 } from '@/lib/api';
@@ -129,6 +131,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('[push] Failed to register push token:', error);
     });
   }, [profileComplete, session?.access_token]);
+
+  // Drives the "online" indicator matches see on the Messages screen's
+  // Activities row (ChatMatch['user'].isOnline — see getChats' 2-minute
+  // freshness window in apps/backend/src/controllers/chats.ts). Pings while
+  // foregrounded only; the interval is well under that 2-minute window so a
+  // couple of missed/delayed pings still don't flip someone to "offline".
+  useEffect(() => {
+    const token = session?.access_token;
+    if (!token) return;
+
+    let cancelled = false;
+    const ping = () => {
+      if (cancelled || AppState.currentState !== 'active') return;
+      sendHeartbeat(token).catch(() => {});
+    };
+
+    ping();
+    const interval = setInterval(ping, 45_000);
+    const sub = AppState.addEventListener('change', next => {
+      if (next === 'active') ping();
+    });
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [session?.access_token]);
 
   const refreshProfileCompletion = async () => {
     if (!session?.access_token || !session.user.id) {

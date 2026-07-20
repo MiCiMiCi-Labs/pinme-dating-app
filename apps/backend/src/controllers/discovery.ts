@@ -179,10 +179,12 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
       id: { notIn: Array.from(excludedUserIds) },
       profile: { isNot: null },
       photos: { some: {} },
-      OR: [
-        { privacySettings: { is: null } },
-        { privacySettings: { is: { discoverable: true } } },
-      ],
+      // Every user gets a privacySettings row the moment their account is
+      // created (see syncCurrentUser). Treating a missing row as
+      // discoverable was a privacy fail-open: if that row were ever lost
+      // to a migration bug or bad data import, someone who'd explicitly
+      // turned discoverability off would silently reappear.
+      privacySettings: { is: { discoverable: true } },
     };
 
     if (preferences?.preferredGender) {
@@ -253,6 +255,7 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
             jobTitle: true,
             relationshipGoal: true,
             height: true,
+            hiddenFields: true,
           },
         },
         photos: {
@@ -308,7 +311,9 @@ export async function getDiscoveryFeed(req: Request, res: Response) {
       distanceKm: candidate.privacySettings?.showDistance
         ? fuzzyDistance(distanceKm)
         : null,
-      jobTitle: candidate.profile?.jobTitle ?? null,
+      jobTitle: candidate.profile?.hiddenFields?.includes('jobTitle')
+        ? null
+        : candidate.profile?.jobTitle ?? null,
       relationshipGoal: candidate.profile?.relationshipGoal ?? null,
       height: candidate.profile?.height ?? null,
       primaryPhoto: candidate.photos[0] ?? null,

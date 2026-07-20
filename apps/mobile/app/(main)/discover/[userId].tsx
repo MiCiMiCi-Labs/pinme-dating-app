@@ -28,7 +28,7 @@ import { useAuth } from '@/contexts/auth';
 import { getCachedDiscoveryUser } from '@/lib/discovery-cache';
 import { readCachedMatchedProfile, writeCachedMatchedProfile } from '@/lib/matchedProfileCache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { markSwiped } from '@/lib/swipedUsers';
+import { confirmSwiped, markSwipedPending, unmarkSwipedIfPending } from '@/lib/swipedUsers';
 import { useDislikeFromLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
 import { markDiscoveryNeedsRefresh } from '@/stores/discoveryUi.store';
 import { markVoiceRoomNeedsRefresh } from '@/stores/voiceRoom.store';
@@ -219,7 +219,6 @@ export default function ProfileDetailScreen() {
     setLiked(true);
 
     if (source === 'likes') {
-      markSwiped(user.id);
       showStamp('like', () => {
         likeFromLikesMutation.mutate(user, {
           onSuccess: ({ result }) => {
@@ -262,14 +261,22 @@ export default function ProfileDetailScreen() {
     }
 
     // source === 'discover'
-    markSwiped(user.id);
+    markSwipedPending(user.id);
     markDiscoveryNeedsRefresh();
 
     const apiPromise = (async () => {
-      if (!session?.access_token) return null;
+      if (!session?.access_token) {
+        unmarkSwipedIfPending(user.id);
+        return null;
+      }
       try {
-        return await createSwipe(session.access_token, user.id, 'LIKE');
+        const result = await createSwipe(session.access_token, user.id, 'LIKE');
+        confirmSwiped(user.id);
+        return result;
       } catch (error) {
+        // Never recorded server-side — don't keep this person hidden for
+        // the rest of the session over a request that didn't go through.
+        unmarkSwipedIfPending(user.id);
         if (isMatchLimitError(error)) {
           return error;
         }
@@ -316,7 +323,6 @@ export default function ProfileDetailScreen() {
     setDisliking(true);
 
     if (source === 'likes') {
-      markSwiped(user.id);
       showStamp('nope', () => {
         dislikeFromLikesMutation.mutate(user, {
           onSuccess: () => router.back(),
@@ -330,11 +336,15 @@ export default function ProfileDetailScreen() {
     }
 
     // source === 'discover'
-    markSwiped(user.id);
+    markSwipedPending(user.id);
     markDiscoveryNeedsRefresh();
     const uid = user.id;
     if (session?.access_token) {
-      createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
+      createSwipe(session.access_token, uid, 'DISLIKE')
+        .then(() => confirmSwiped(uid))
+        .catch(() => unmarkSwipedIfPending(uid));
+    } else {
+      unmarkSwipedIfPending(uid);
     }
     showStamp('nope', () => router.back());
   };
@@ -379,7 +389,7 @@ export default function ProfileDetailScreen() {
 
             try {
               await blockUserApi(token, user.id);
-              markSwiped(user.id);
+              confirmSwiped(user.id);
               markVoiceRoomNeedsRefresh();
               showToast('User blocked', 'success');
               router.back();

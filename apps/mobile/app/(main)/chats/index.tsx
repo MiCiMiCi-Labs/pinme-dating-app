@@ -151,7 +151,7 @@ export default function ChatListScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.activityRow}>
                 {activityMatches.map(match => (
                   <View key={match.matchId} style={styles.activityItem}>
-                    <View style={styles.activityRing}>
+                    <View style={[styles.activityRing, !match.user.isOnline && styles.activityRingOffline]}>
                       <ProfileThumb uri={getPrimaryPhoto(match)} size={58} />
                     </View>
                     <Text style={styles.activityName} numberOfLines={1}>{match.user.name}</Text>
@@ -247,6 +247,9 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  activityRingOffline: {
+    borderColor: 'transparent',
   },
   activityName: {
     color: colors.text,

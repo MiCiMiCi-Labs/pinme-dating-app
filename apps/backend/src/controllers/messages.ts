@@ -623,8 +623,12 @@ export async function markMessagesRead(req: Request, res: Response) {
     const result = await prisma.message.updateMany({
       where: {
         matchId,
-        senderId: { not: dbUserId },
         isRead: false,
+        // senderId: { not: dbUserId } alone excludes NULL (SYSTEM messages,
+        // e.g. call-outcome records — see recordCallOutcomeMessage) since SQL
+        // NULL <> value is neither true nor false. OR senderId: null pulls
+        // those back in; own messages (senderId === dbUserId) stay excluded.
+        OR: [{ senderId: { not: dbUserId } }, { senderId: null }],
       },
       data: {
         isRead: true,

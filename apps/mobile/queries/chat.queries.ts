@@ -13,7 +13,7 @@ import {
   sendMessage,
 } from '@/lib/api';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { markSwiped } from '@/lib/swipedUsers';
+import { confirmSwiped, markSwipedPending, unmarkSwipedIfPending } from '@/lib/swipedUsers';
 import { hideLikedUser, restoreLikedUser } from '@/stores/likedYou.store';
 import { registerMatchSuccess } from '@/stores/matchEvents.store';
 import { useAccessToken, useAuthUserId } from './auth';
@@ -140,7 +140,7 @@ export function useMatchFromLikesList() {
     onMutate: async (targetUser) => {
       if (!userId) return undefined;
 
-      markSwiped(targetUser.id);
+      markSwipedPending(targetUser.id);
       hideLikedUser(targetUser.id);
 
       await cancelLikesCacheQueries(queryClient, userId);
@@ -150,11 +150,13 @@ export function useMatchFromLikesList() {
       return snapshot;
     },
     onError: (_error, targetUser, context) => {
+      unmarkSwipedIfPending(targetUser.id);
       restoreLikedUser(targetUser.id);
       if (!userId || !context) return;
       restoreLikesCaches(queryClient, userId, context);
     },
     onSuccess: ({ result, targetUser }) => {
+      confirmSwiped(targetUser.id);
       if (!userId) return;
 
       if (result.match) {
@@ -195,6 +197,10 @@ export function useMatchFromLikesList() {
                 gender: targetUser.gender,
                 bio: targetUser.bio,
                 city: targetUser.city,
+                // Corrected by the invalidateQueries(chatMatches) call below,
+                // which refetches real isOnline from the server immediately
+                // after this optimistic insert.
+                isOnline: false,
                 photos: targetUser.photos,
               },
             },
@@ -248,7 +254,7 @@ export function useDislikeFromLikesList() {
     onMutate: async (targetUser) => {
       if (!userId) return undefined;
 
-      markSwiped(targetUser.id);
+      markSwipedPending(targetUser.id);
       hideLikedUser(targetUser.id);
 
       await cancelLikesCacheQueries(queryClient, userId);
@@ -258,11 +264,13 @@ export function useDislikeFromLikesList() {
       return snapshot;
     },
     onError: (_error, targetUser, context) => {
+      unmarkSwipedIfPending(targetUser.id);
       restoreLikedUser(targetUser.id);
       if (!userId || !context) return;
       restoreLikesCaches(queryClient, userId, context);
     },
-    onSuccess: () => {
+    onSuccess: (_data, targetUser) => {
+      confirmSwiped(targetUser.id);
       if (!userId) return;
       queryClient.invalidateQueries({ queryKey: queryKeys.likesPreview(userId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.likesList(userId) });

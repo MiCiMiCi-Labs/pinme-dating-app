@@ -1,6 +1,9 @@
 import { Gender } from '@prisma/client';
 import { Request, Response } from 'express';
+import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
+
+const MINIMUM_AGE = 18;
 
 function getSyncErrorDetail(error: unknown): string {
   if (error instanceof Error) {
@@ -60,15 +63,13 @@ export async function syncCurrentUser(req: Request, res: Response) {
       return;
     }
 
+    // Email/phone are optional identifiers used only to merge with an
+    // existing account — supabaseAuthId is the real anchor. Some sign-in
+    // methods legitimately have neither: Apple omits the email claim on any
+    // authorization after the user's first-ever one, and Google/Facebook
+    // both allow the user to deny the email permission.
     const authEmail = authUser.email?.trim() || null;
     const authPhone = authUser.phone?.trim() || null;
-
-    if (!authEmail && !authPhone) {
-      res.status(400).json({
-        message: 'Authenticated user does not have an email address or phone number',
-      });
-      return;
-    }
 
     const [userByAuthId, userByEmail, userByPhone] = await Promise.all([
       prisma.user.findUnique({
@@ -115,7 +116,7 @@ export async function syncCurrentUser(req: Request, res: Response) {
         prisma.privacySettings.upsert({
           where: { userId: existingUser.id },
           update: {},
-          create: { userId: existingUser.id, discoverable: true, showDistance: false, showOnlineStatus: false },
+          create: { userId: existingUser.id, discoverable: true, showDistance: false, showOnlineStatus: true },
         }),
       ]);
 
@@ -155,6 +156,8 @@ export async function syncCurrentUser(req: Request, res: Response) {
 
     if (!parsedBirthday) {
       validationErrors.push('birthday must be a valid date, e.g. 2000-01-01');
+    } else if (calculateAge(parsedBirthday) < MINIMUM_AGE) {
+      validationErrors.push(`you must be at least ${MINIMUM_AGE} to use PinMe`);
     }
 
     if (validationErrors.length > 0) {
@@ -175,7 +178,7 @@ export async function syncCurrentUser(req: Request, res: Response) {
         gender: gender as Gender,
         birthday: parsedBirthday as Date,
         privacySettings: {
-          create: { discoverable: true, showDistance: false, showOnlineStatus: false },
+          create: { discoverable: true, showDistance: false, showOnlineStatus: true },
         },
       },
       include: { profile: true },

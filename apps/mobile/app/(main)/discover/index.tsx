@@ -16,7 +16,7 @@ import { colors, IconButton, ScreenTitle } from '@/design/system';
 import { isMatchLimitError, type DiscoveryUser } from '@/lib/api';
 import { cacheDiscoveryUsers } from '@/lib/discovery-cache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { filterSwiped, markSwiped } from '@/lib/swipedUsers';
+import { confirmSwiped, filterSwiped, markSwipedPending, unmarkSwipedIfPending } from '@/lib/swipedUsers';
 import {
   DISCOVERY_MAX_BUFFER,
   DISCOVERY_PAGE_SIZE,
@@ -133,13 +133,14 @@ export default function SwipeScreen() {
     }
 
     if (!user) return;
-    markSwiped(user.id);
+    markSwipedPending(user.id);
 
     try {
       const { match } = await swipeMutation.mutateAsync({
         targetId: user.id,
         action: direction === 'like' ? 'LIKE' : 'DISLIKE',
       });
+      confirmSwiped(user.id);
       if (match) {
         const primaryPhoto = user.photos.find(photo => photo.isPrimary) ?? user.photos[0];
         registerMatchSuccess({
@@ -152,6 +153,11 @@ export default function SwipeScreen() {
         setMatchedMatchId(match.id);
       }
     } catch (error) {
+      // Never got recorded server-side (network failure, or a match-limit
+      // rejection where the backend explicitly didn't create the swipe) —
+      // don't let this person stay permanently hidden for the rest of the
+      // app session over a transient/rejected request.
+      unmarkSwipedIfPending(user.id);
       if (isMatchLimitError(error)) {
         Alert.alert(
           'Match limit reached',
@@ -276,7 +282,12 @@ export default function SwipeScreen() {
             setUsers([]);
             setCurrentIndex(0);
             pan.setValue({ x: 0, y: 0 });
-            feedQuery.refetch();
+            // A plain refetch() would re-run every page already in the
+            // infinite query's cache using each page's old cursor, mixing
+            // pagination state from before the filter changed. Reset the
+            // whole query so it restarts clean from page 1 under the new
+            // filter.
+            resetFeed();
           }}
         />
       ) : null}

@@ -11,6 +11,9 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:seed": "ts-node prisma/seed.ts",
+    "shadow-db:bootstrap": "node shadow-db/manage.mjs bootstrap",
+    "shadow-db:start": "node shadow-db/manage.mjs start",
+    "shadow-db:stop": "node shadow-db/manage.mjs stop",
     "photos:backfill-thumbnails": "ts-node src/scripts/backfillPhotoThumbnails.ts",
     "test": "jest --runInBand"
   },
@@ -38,6 +41,7 @@
     "@types/node": "^22.0.0",
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
+    "embedded-postgres": "^16.14.0-beta.17",
     "jest": "^29.7.0",
     "prisma": "^5.22.0",
     "supertest": "^7.2.2",

@@ -668,6 +668,28 @@ export async function getUserById(accessToken: string, userId: string) {
   return parseResponse<{ user: PublicUser }>(response);
 }
 
+// Bumps the caller's lastActiveAt so matches see them as online (see
+// ChatMatch['user'].isOnline in getChatMatches) — fire-and-forget from the
+// mobile side, see the root-layout heartbeat hook.
+export async function sendHeartbeat(accessToken: string) {
+  await fetch(`${API_BASE_URL}/api/v1/users/heartbeat`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+}
+
+// Permanently deletes the caller's account and all of its data (see
+// deleteAccount in apps/backend/src/controllers/users.ts) and the underlying
+// Supabase Auth identity — irreversible, never call without an explicit
+// confirmation from the user.
+export async function deleteMyAccount(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/users/me`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  await parseResponse<void>(response);
+}
+
 export async function getMatchProfile(accessToken: string, matchId: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}/profile`, {
     headers: authHeaders(accessToken),
@@ -752,6 +774,7 @@ export type ChatMatch = {
     gender: string;
     bio: string | null;
     city: string | null;
+    isOnline: boolean;
     photos: Photo[];
   };
 };

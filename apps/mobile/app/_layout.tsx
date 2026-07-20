@@ -10,6 +10,7 @@ import { IosVoipCallKitCoordinator } from '@/components/ios-voip-callkit-coordin
 import { AuthProvider, useAuth } from '@/contexts/auth';
 import { CallProvider } from '@/contexts/call';
 import { colors } from '@/design/system';
+import { resetSwipedUsers } from '@/lib/swipedUsers';
 import { resetChatEvents } from '@/stores/chatEvents.store';
 import { resetDiscoveryUi } from '@/stores/discoveryUi.store';
 import { resetHiddenLikedUsers } from '@/stores/likedYou.store';
@@ -19,7 +20,17 @@ import { resetVoiceRoomState } from '@/stores/voiceRoom.store';
 SplashScreen.preventAutoHideAsync();
 
 if (__DEV__) {
-  LogBox.ignoreLogs(['Sending `onAnimatedValueUpdate` with no listeners registered.']);
+  LogBox.ignoreLogs([
+    'Sending `onAnimatedValueUpdate` with no listeners registered.',
+    // Benign teardown race, private-call end only: CallKit's own native
+    // audio-session cleanup and LiveKit's internal registerGlobals()-driven
+    // stopAudioSession() (see lib/callAudioCoordinator.ts's ownership notes)
+    // both try to deactivate the same AVAudioSession when a CallKit-managed
+    // call ends — whichever runs second finds it already inactive. Call
+    // teardown and the next call both proceed normally; this is LiveKit's
+    // own logged rejection, not a thrown/unhandled error.
+    'AudioSession configuration failed, stopping audio engine',
+  ]);
 }
 
 const queryClient = new QueryClient({
@@ -103,6 +114,7 @@ function AuthCacheBoundary() {
       resetHiddenLikedUsers();
       resetProfileCompletion();
       resetVoiceRoomState();
+      resetSwipedUsers();
     }
 
     previousUserIdRef.current = currentUserId;

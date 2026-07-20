@@ -24,7 +24,7 @@ function getUploadFile(req: Request, field: keyof PhotoUploadFiles) {
   return files?.[field]?.[0] ?? null;
 }
 
-function getStoragePath(publicUrl: string | null | undefined) {
+export function getStoragePath(publicUrl: string | null | undefined) {
   if (!publicUrl) return null;
   return publicUrl.split(`/storage/v1/object/public/${BUCKET}/`)[1] ?? null;
 }
