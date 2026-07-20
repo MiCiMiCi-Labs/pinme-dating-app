@@ -15,7 +15,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PaywallModal } from '@/components/paywall-modal';
 import { colors } from '@/design/system';
+import { getMatchProfile } from '@/lib/api';
+import {
+  getMatchedProfilePrefetchLimit,
+  readCachedMatchedProfile,
+  writeCachedMatchedProfile,
+} from '@/lib/matchedProfileCache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
+import { supabase } from '@/lib/supabase';
 import { useLikesPreview, useMatches } from '@/queries/chat.queries';
 import { useMySubscription, useRedeemPromoCode } from '@/queries/subscription.queries';
 import { $hiddenLikedUserIds } from '@/stores/likedYou.store';
@@ -104,9 +111,10 @@ export default function MatchesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [paywallVisible, setPaywallVisible] = useState(false);
   const [paywallError, setPaywallError] = useState<string | null>(null);
+  const [secondaryQueriesEnabled, setSecondaryQueriesEnabled] = useState(false);
   const { data, isLoading, refetch } = useMatches();
-  const likesPreviewQuery = useLikesPreview();
-  const subscriptionQuery = useMySubscription();
+  const likesPreviewQuery = useLikesPreview(secondaryQueriesEnabled);
+  const subscriptionQuery = useMySubscription(secondaryQueriesEnabled);
   const redeemPromoMutation = useRedeemPromoCode();
   const hiddenLikedUserIds = useStore($hiddenLikedUserIds);
   const matches = Array.isArray(data) ? data : [];
@@ -116,6 +124,44 @@ export default function MatchesScreen() {
   const likedPreviewPhotos = visiblePreview.map(item => item.thumbnailUrl || item.photoUrl);
   const visibleLikesCount = Math.max(0, (likesPreview?.count ?? 0) - hiddenCount);
   const premium = Boolean(subscriptionQuery.data?.subscription?.isActive);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSecondaryQueriesEnabled(true), 500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function prefetchMatchedProfiles() {
+      if (!matches.length) return;
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token || !session.user.id || cancelled) return;
+
+      const matchesToPrefetch = matches.slice(0, getMatchedProfilePrefetchLimit());
+
+      for (const match of matchesToPrefetch) {
+        if (cancelled) return;
+
+        const cached = await readCachedMatchedProfile(session.user.id, match.matchId);
+        if (cached) continue;
+
+        try {
+          const { user } = await getMatchProfile(session.access_token, match.matchId);
+          await writeCachedMatchedProfile(session.user.id, match.matchId, user);
+        } catch {
+          // Prefetch failures should never block the match list.
+        }
+      }
+    }
+
+    prefetchMatchedProfiles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [matches]);
 
   const handleLikedTeaserPress = () => {
     if (premium) {
@@ -180,6 +226,9 @@ export default function MatchesScreen() {
                   matchId,
                   source: 'matches',
                   name: user.name,
+                  age: String(user.age),
+                  city: user.city ?? '',
+                  gender: user.gender,
                   photoUrl: primaryPhotoUrl,
                 },
               })}
@@ -201,7 +250,7 @@ export default function MatchesScreen() {
             <LikedYouTeaser
               count={visibleLikesCount}
               previewPhotos={likedPreviewPhotos}
-              loading={likesPreviewQuery.isLoading}
+              loading={!secondaryQueriesEnabled || likesPreviewQuery.isLoading}
               premium={premium}
               onPress={handleLikedTeaserPress}
             />
@@ -390,7 +439,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   card: {
-    flex: 1,
+    flexBasis: '48%',
+    flexGrow: 0,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: colors.line,

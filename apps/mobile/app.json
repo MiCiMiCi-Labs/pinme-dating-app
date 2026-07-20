@@ -5,6 +5,7 @@
     "owner": "micimici",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/brand/pinme-logo-final.png",
     "userInterfaceStyle": "automatic",
     "assetBundlePatterns": [
       "**/*"
@@ -12,6 +13,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.micimici.pinme",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "PinMe needs your location to show nearby people.",
         "NSPhotoLibraryUsageDescription": "PinMe needs access to your photos to update your profile.",
@@ -20,11 +22,16 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["voip", "remote-notification"]
       }
     },
     "android": {
       "package": "com.micimici.pinme",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/brand/pinme-logo-final.png",
+        "backgroundColor": "#ffffff"
+      },
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -34,11 +41,21 @@
       ]
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/brand/pinme-logo-final.png"
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/brand/pinme-logo-final.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#E64C61"
+        }
+      ],
       [
         "expo-location",
         {
@@ -53,7 +70,9 @@
         }
       ],
       "expo-notifications",
-      "expo-font"
+      "expo-font",
+      "@config-plugins/react-native-callkeep",
+      "./plugins/withVoipPushKit"
     ],
     "scheme": "pinme",
     "experiments": {

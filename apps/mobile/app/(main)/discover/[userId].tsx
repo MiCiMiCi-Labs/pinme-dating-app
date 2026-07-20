@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  ActivityIndicator,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,11 +14,21 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PhotoCarousel, ProfileDetailContent, ProfilePreviewHeader } from '@/components/profile-detail';
 import { colors } from '@/design/system';
-import { blockUser as blockUserApi, createSwipe, getUserById, reportUser as reportUserApi, type PublicUser } from '@/lib/api';
+import {
+  blockUser as blockUserApi,
+  createSwipe,
+  getMatchProfile,
+  getUserById,
+  isMatchLimitError,
+  reportUser as reportUserApi,
+  type DiscoveryUser,
+  type PublicUser,
+} from '@/lib/api';
 import { useAuth } from '@/contexts/auth';
 import { getCachedDiscoveryUser } from '@/lib/discovery-cache';
+import { readCachedMatchedProfile, writeCachedMatchedProfile } from '@/lib/matchedProfileCache';
 import { getDisplayPhotoUrl } from '@/lib/photos';
-import { markSwiped } from '@/lib/swipedUsers';
+import { confirmSwiped, markSwipedPending, unmarkSwipedIfPending } from '@/lib/swipedUsers';
 import { useDislikeFromLikesList, useMatchFromLikesList } from '@/queries/chat.queries';
 import { markDiscoveryNeedsRefresh } from '@/stores/discoveryUi.store';
 import { markVoiceRoomNeedsRefresh } from '@/stores/voiceRoom.store';
@@ -28,17 +40,73 @@ function resolveSource(raw: string | undefined): ProfileDetailSource {
   return raw === 'likes' || raw === 'matches' || raw === 'preview' ? raw : 'discover';
 }
 
+function cachedDiscoveryToPublicUser(user: DiscoveryUser | null): PublicUser | null {
+  if (!user) return null;
+
+  return {
+    id: user.id,
+    name: user.name,
+    age: user.age,
+    gender: user.gender,
+    bio: null,
+    city: user.city,
+    profile: null,
+    photos: user.photos,
+  };
+}
+
+function buildParamPreviewUser(params: {
+  userId?: string;
+  name?: string;
+  age?: string;
+  city?: string;
+  gender?: string;
+  photoUrl?: string;
+}): PublicUser | null {
+  if (!params.userId || !params.name) return null;
+
+  const age = Number(params.age);
+  return {
+    id: params.userId,
+    name: params.name,
+    age: Number.isFinite(age) ? age : 0,
+    gender: params.gender ?? '',
+    bio: null,
+    city: params.city ?? null,
+    profile: null,
+    photos: params.photoUrl
+      ? [
+          {
+            id: `${params.userId}-preview-photo`,
+            url: params.photoUrl,
+            thumbnailUrl: params.photoUrl,
+            isPrimary: true,
+            isVerified: false,
+            orderIndex: 0,
+          },
+        ]
+      : [],
+  };
+}
+
 export default function ProfileDetailScreen() {
   const {
     userId,
     matchId,
     source: rawSource,
+    name,
+    age,
+    city,
+    gender,
     photoUrl,
   } = useLocalSearchParams<{
     userId: string;
     matchId?: string;
     source?: string;
     name?: string;
+    age?: string;
+    city?: string;
+    gender?: string;
     photoUrl?: string;
   }>();
   const source = resolveSource(rawSource);
@@ -46,8 +114,12 @@ export default function ProfileDetailScreen() {
   const { session } = useAuth();
   const likeFromLikesMutation = useMatchFromLikesList();
   const dislikeFromLikesMutation = useDislikeFromLikesList();
-  const [user, setUser] = useState<PublicUser | null>(() => getCachedDiscoveryUser(userId));
-  const [loading, setLoading] = useState(!getCachedDiscoveryUser(userId));
+  const cachedUser = getCachedDiscoveryUser(userId);
+  const initialUser =
+    cachedDiscoveryToPublicUser(cachedUser) ??
+    buildParamPreviewUser({ userId, name, age, city, gender, photoUrl });
+  const [user, setUser] = useState<PublicUser | null>(() => initialUser);
+  const [loading, setLoading] = useState(!initialUser);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [liked, setLiked] = useState(false);
   const [disliking, setDisliking] = useState(false);
@@ -77,11 +149,40 @@ export default function ProfileDetailScreen() {
   useEffect(() => {
     let cancelled = false;
 
+    async function loadMatchedCache() {
+      const viewerId = session?.user.id;
+      if (source !== 'matches' || !viewerId || !matchId) return;
+
+      const cached = await readCachedMatchedProfile(viewerId, matchId);
+      if (!cached || cancelled) return;
+
+      setUser(cached);
+      setLoading(false);
+    }
+
+    loadMatchedCache();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [matchId, session?.user.id, source]);
+
+  useEffect(() => {
+    let cancelled = false;
+
     async function load() {
       if (!userId || !session?.access_token) return;
       try {
-        const { user: data } = await getUserById(session.access_token, userId);
-        if (!cancelled) setUser(data);
+        const { user: data } =
+          source === 'matches' && matchId
+            ? await getMatchProfile(session.access_token, matchId)
+            : await getUserById(session.access_token, userId);
+        if (!cancelled) {
+          setUser(data);
+          if (source === 'matches' && matchId && session.user.id) {
+            writeCachedMatchedProfile(session.user.id, matchId, data);
+          }
+        }
       } catch (err) {
         console.error('[ProfileDetail] getUserById failed:', err);
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load profile');
@@ -91,8 +192,10 @@ export default function ProfileDetailScreen() {
     }
 
     load();
-    return () => { cancelled = true; };
-  }, [session?.access_token, userId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [matchId, session?.access_token, source, userId]);
 
   const showStamp = (type: 'like' | 'nope', then: () => void) => {
     setStamp(type);
@@ -116,7 +219,6 @@ export default function ProfileDetailScreen() {
     setLiked(true);
 
     if (source === 'likes') {
-      markSwiped(user.id);
       showStamp('like', () => {
         likeFromLikesMutation.mutate(user, {
           onSuccess: ({ result }) => {
@@ -139,6 +241,17 @@ export default function ProfileDetailScreen() {
             }
           },
           onError: (err) => {
+            if (isMatchLimitError(err)) {
+              Alert.alert(
+                'Match limit reached',
+                err instanceof Error ? err.message : 'Unmatch someone to keep matching.',
+                [
+                  { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+                  { text: 'Manage matches', onPress: () => router.replace('/(main)/matches') },
+                ]
+              );
+              return;
+            }
             showToast(err instanceof Error ? err.message : 'Failed to like user.', 'error');
             router.back();
           },
@@ -148,20 +261,42 @@ export default function ProfileDetailScreen() {
     }
 
     // source === 'discover'
-    markSwiped(user.id);
+    markSwipedPending(user.id);
     markDiscoveryNeedsRefresh();
 
     const apiPromise = (async () => {
-      if (!session?.access_token) return null;
+      if (!session?.access_token) {
+        unmarkSwipedIfPending(user.id);
+        return null;
+      }
       try {
-        return await createSwipe(session.access_token, user.id, 'LIKE');
-      } catch (_) {
+        const result = await createSwipe(session.access_token, user.id, 'LIKE');
+        confirmSwiped(user.id);
+        return result;
+      } catch (error) {
+        // Never recorded server-side — don't keep this person hidden for
+        // the rest of the session over a request that didn't go through.
+        unmarkSwipedIfPending(user.id);
+        if (isMatchLimitError(error)) {
+          return error;
+        }
         return null;
       }
     })();
 
     showStamp('like', async () => {
       const result = await apiPromise;
+      if (isMatchLimitError(result)) {
+        Alert.alert(
+          'Match limit reached',
+          result instanceof Error ? result.message : 'Unmatch someone to keep matching.',
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+            { text: 'Manage matches', onPress: () => router.replace('/(main)/matches') },
+          ]
+        );
+        return;
+      }
       if (!result) { router.back(); return; }
       const { match } = result;
       if (match) {
@@ -188,7 +323,6 @@ export default function ProfileDetailScreen() {
     setDisliking(true);
 
     if (source === 'likes') {
-      markSwiped(user.id);
       showStamp('nope', () => {
         dislikeFromLikesMutation.mutate(user, {
           onSuccess: () => router.back(),
@@ -202,11 +336,15 @@ export default function ProfileDetailScreen() {
     }
 
     // source === 'discover'
-    markSwiped(user.id);
+    markSwipedPending(user.id);
     markDiscoveryNeedsRefresh();
     const uid = user.id;
     if (session?.access_token) {
-      createSwipe(session.access_token, uid, 'DISLIKE').catch(() => {});
+      createSwipe(session.access_token, uid, 'DISLIKE')
+        .then(() => confirmSwiped(uid))
+        .catch(() => unmarkSwipedIfPending(uid));
+    } else {
+      unmarkSwipedIfPending(uid);
     }
     showStamp('nope', () => router.back());
   };
@@ -251,7 +389,7 @@ export default function ProfileDetailScreen() {
 
             try {
               await blockUserApi(token, user.id);
-              markSwiped(user.id);
+              confirmSwiped(user.id);
               markVoiceRoomNeedsRefresh();
               showToast('User blocked', 'success');
               router.back();
@@ -299,10 +437,15 @@ export default function ProfileDetailScreen() {
   if (loading && !user) {
     return (
       <SafeAreaView style={styles.screen}>
-        <View style={[styles.skeletonHero, { height: carouselHeight }]} />
+        <View style={[styles.skeletonHero, { height: carouselHeight }]}>
+          <Pressable style={styles.loadingBackButton} onPress={() => router.back()} hitSlop={12}>
+            <Text style={styles.loadingBackText}>‹</Text>
+          </Pressable>
+        </View>
         <View style={styles.skeletonBody}>
-          <View style={styles.skeletonLine} />
-          <View style={[styles.skeletonLine, { width: '48%', height: 14, marginTop: 0 }]} />
+          <ActivityIndicator color={colors.primary} />
+          <Text style={styles.loadingTitle}>Loading profile...</Text>
+          <Text style={styles.loadingCopy}>Getting the latest profile details.</Text>
         </View>
       </SafeAreaView>
     );
@@ -393,16 +536,39 @@ const styles = StyleSheet.create({
   skeletonHero: {
     backgroundColor: colors.line,
   },
+  loadingBackButton: {
+    position: 'absolute',
+    top: 18,
+    left: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+  },
+  loadingBackText: {
+    color: colors.text,
+    fontSize: 34,
+    lineHeight: 36,
+    fontWeight: '500',
+  },
   skeletonBody: {
     paddingHorizontal: 28,
-    paddingTop: 24,
-    gap: 12,
+    paddingTop: 32,
+    alignItems: 'center',
+    gap: 10,
   },
-  skeletonLine: {
-    height: 22,
-    borderRadius: 8,
-    backgroundColor: colors.line,
-    width: '65%',
+  loadingTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '800',
+    marginTop: 8,
+  },
+  loadingCopy: {
+    color: colors.muted,
+    fontSize: 14,
+    textAlign: 'center',
   },
   stamp: {
     position: 'absolute',

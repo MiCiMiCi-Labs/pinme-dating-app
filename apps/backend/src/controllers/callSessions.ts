@@ -14,6 +14,7 @@ import {
   issueLiveKitCredentials,
   recordCallOutcomeMessage,
 } from '../lib/calls';
+import { sendVoipPushForIncomingCall } from '../lib/apnsVoip';
 
 async function resolveDbUser(supabaseAuthId: string) {
   return prisma.user.findUnique({
@@ -252,6 +253,36 @@ export async function startCall(req: Request, res: Response): Promise<void> {
 
     const created = await fetchCallWithParticipants(callId);
     res.status(201).json(serializeCall(created!));
+
+    // Best-effort side effect, sent only after the Call row is committed and
+    // the response is already on the wire: APNs being unconfigured, the
+    // callee having no token, network failures, or invalid-token cleanup
+    // failures must never roll back, delete, or overwrite the Call that was
+    // just created. sendVoipPushForIncomingCall() never throws/rejects, but
+    // it is still properly awaited (not fire-and-forget) inside a try/catch
+    // so nothing here can produce an unhandled rejection.
+    try {
+      const summary = await sendVoipPushForIncomingCall({
+        calleeUserId: calleeId,
+        callId: created!.id,
+        callerName: created!.caller.name,
+      });
+      // Structured, secret-free: only counts + callId, never a device
+      // token, APNs JWT, private key, full payload, or callerName. Logging
+      // itself can't affect the already-sent 201 — this runs after it.
+      if (summary.failed > 0) {
+        console.warn('[startCall] VoIP push send had failures:', {
+          callId: created!.id,
+          total: summary.total,
+          sent: summary.sent,
+          invalid: summary.invalid,
+          failed: summary.failed,
+          skipped: summary.skipped,
+        });
+      }
+    } catch (error) {
+      console.error('[startCall] VoIP push send failed (non-fatal):', error);
+    }
   } catch (error) {
     console.error('[startCall] error:', error);
     res.status(500).json({ error: 'Internal server error' });

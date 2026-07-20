@@ -12,14 +12,33 @@ import {
   getCallLiveKitCredentials,
   getIncomingCalls,
   startCall as startCallApi,
+  ApiError,
   type CallFailureReason,
   type CallSummary,
   type LiveKitCredentials,
 } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
+import { markChatNeedsRefresh } from '@/stores/chatEvents.store';
 import { showToast } from '@/stores/toast.store';
-import { useAccessToken } from '@/queries/auth';
+import { useAccessToken, useAuthUserId } from '@/queries/auth';
 import { useCurrentUser } from '@/queries/user.queries';
+import { endNativeCallKitCall, answerIncomingCallKitCall } from '@/lib/voipPushKit';
+import {
+  isValidCallId,
+  resolveAnswerConfirmation,
+  resolveEndConfirmation,
+  type NativeCallIntentResult,
+} from '@/lib/nativeCallIntentQueue';
+import {
+  INITIAL_CALLKIT_AUDIO_STATE,
+  isPrivateCallAudioAuthorized as resolveIsPrivateCallAudioAuthorized,
+  resolveCallKitAudioActivation,
+  resolveCallKitAudioDeactivation,
+  resolveCallKitManagedCallEnd,
+  resolveCallKitManagedCallStart,
+  shouldSyncAnswerIncomingCall,
+  type CallKitAudioState,
+} from '@/lib/callAudioCoordinator';
 
 // Global call state machine — see docs/private-voice-calling-spec.md
 // "移动端架构 > 全局 CallProvider". This intentionally does not own CallKit
@@ -41,6 +60,17 @@ export type ActiveCall = {
   call: CallSummary;
   livekit: LiveKitCredentials | null;
   role: 'caller' | 'callee';
+  // Whether CallKit ever displayed this exact callId (via a native
+  // didDisplayIncomingCall/answerCall intent — see handleNativeIncoming/
+  // handleNativeAnswer below), as opposed to a plain Phase 2 foreground call
+  // (started/recovered/refreshed without ever going through the coordinator's
+  // native intent path). Gates both the private-call audio-session
+  // authorization (see isPrivateCallAudioAuthorized below) and the
+  // App-Accept -> CallKit answerIncomingCall sync — a call this device never
+  // learned CallKit was displaying must never wait on a CallKit audio event
+  // it may never receive, and must never trigger a CallKit sync call for a
+  // call CallKit doesn't know about.
+  isCallKitManaged: boolean;
 };
 
 // Identity of whichever decline/cancel/end/fail attempt currently holds the
@@ -83,6 +113,35 @@ type CallContextType = {
   // call normally) with FAILED. Used for LiveKitRoom's onDisconnected/onError
   // and for "the partner left and didn't come back" after a grace period.
   confirmCallOrFail: () => Promise<void>;
+  // Native intent entry points for the iOS PushKit/CallKit JS runtime
+  // coordinator (components/ios-voip-callkit-coordinator.tsx) — see
+  // docs/private-voice-calling-spec.md "iOS 原生能力". REST (GET
+  // /calls/:callId) is the only source of truth for what a native
+  // event/payload *means*; these never trust callerName/handle/role/status
+  // carried by a PushKit or CallKit payload. Deliberately NOT a second call
+  // state machine: each of these re-validates against the server and then
+  // delegates into the existing accept/decline/cancel/end actions and their
+  // reconciliation paths above.
+  handleNativeIncoming: (callId: string) => Promise<NativeCallIntentResult>;
+  handleNativeAnswer: (callId: string) => Promise<NativeCallIntentResult>;
+  handleNativeEnd: (callId: string) => Promise<NativeCallIntentResult>;
+  // CallKit `didActivateAudioSession`/`didDeactivateAudioSession` forwarded
+  // by the coordinator — no callId of their own (see
+  // lib/callAudioCoordinator.ts), so these just poke the CallKit-audio state
+  // machine, which is the only thing that carries call-scoped meaning.
+  handleNativeAudioSessionActivated: () => void;
+  handleNativeAudioSessionDeactivated: () => void;
+  // Called by the coordinator the instant it sees a legal callId from a
+  // native incoming/didDisplay/answer event — before handleNativeIncoming/
+  // handleNativeAnswer's own REST GET has even started. Only starts audio
+  // tracking; never creates activeCall/requests a token/calls accept.
+  handleNativeCallKitCallIdSeen: (callId: string) => void;
+  // Whether components/voice-call-modal.tsx's `<LiveKitRoom connect={...}>`
+  // may actually connect (and therefore let LiveKit's own registerGlobals()
+  // audio-session manager engage) right now — see
+  // lib/callAudioCoordinator.ts's isPrivateCallAudioAuthorized for the full
+  // rationale. Always true for a call CallKit never displayed.
+  isPrivateCallAudioAuthorized: boolean;
 };
 
 const CallContext = createContext<CallContextType | null>(null);
@@ -109,6 +168,11 @@ const TERMINAL_DISPLAY_MS = 1500;
 // prolonged outage produces one attempt every interval, never a storm.
 const MEDIA_FAILURE_RETRY_MS = 5000;
 const CONFIRM_RETRY_MS = 5000;
+// How long a native-end suppression marker (see nativeEndSuppressionRef)
+// stays valid — long enough to cover a decline/cancel/end REST round trip
+// plus its own reconciliation retry, short enough that it can never mask
+// an unrelated later terminal sync for the same (never-reused) callId.
+const NATIVE_END_SUPPRESSION_MS = 15_000;
 
 function formatDuration(seconds: number): string {
   const clamped = Math.max(0, Math.floor(seconds));
@@ -148,17 +212,34 @@ function terminalToastFor(call: CallSummary): { message: string; type: 'info' | 
 
 export function CallProvider({ children }: { children: ReactNode }) {
   const accessToken = useAccessToken();
+  // The stable Supabase auth identity (session.user.id) — updates the
+  // instant login/logout/switch happens, unlike dbUserId below (an async
+  // /me REST profile fetch that lags behind auth and can briefly still
+  // reflect the OLD identity after a switch). This is the security boundary
+  // native intent handlers check against; dbUserId remains useful for
+  // resolving caller/callee roles against a fetched CallSummary and for
+  // filtering the /calls/active recovery + Realtime subscription, but must
+  // never be the only thing gating a native handler's side effects — see
+  // captureNativeIntentSession/isNativeIntentSessionStillValid below.
+  const authUserId = useAuthUserId();
   const { data: currentUserData } = useCurrentUser();
   const dbUserId = currentUserData?.user.id ?? null;
 
   const [phase, setPhase] = useState<CallPhase>('idle');
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  // CallKit-managed call tracking + audio-session activation (see
+  // lib/callAudioCoordinator.ts) — React state (not a plain ref) because its
+  // changes must actually re-render so components/voice-call-modal.tsx's
+  // `<LiveKitRoom connect={isPrivateCallAudioAuthorized}>` picks them up.
+  const [callKitAudioState, setCallKitAudioState] = useState<CallKitAudioState>(INITIAL_CALLKIT_AUDIO_STATE);
 
   const activeCallRef = useRef(activeCall);
   activeCallRef.current = activeCall;
   const accessTokenRef = useRef(accessToken);
   accessTokenRef.current = accessToken;
+  const authUserIdRef = useRef(authUserId);
+  authUserIdRef.current = authUserId;
   const dbUserIdRef = useRef(dbUserId);
   dbUserIdRef.current = dbUserId;
   const phaseRef = useRef(phase);
@@ -189,7 +270,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // whose request is in flight: a slow request from a previous user would
   // either block the new user's genuinely new recovery from ever starting,
   // or (worse) have its `finally` clear a marker that actually belongs to a
-  // newer request. The generation counter (bumped on every dbUserId
+  // newer request. The generation counter (bumped on every authUserId
   // identity change, see the effect below) is what makes the classic ABA
   // case safe: user A -> B -> A would otherwise leave a slow request from
   // the *first* A session looking identical (same userId) to a request
@@ -197,10 +278,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const recoveryGenerationRef = useRef(0);
   const recoveryRequestRef = useRef<{ userId: string; generation: number; requestId: number } | null>(null);
   const nextRecoveryRequestIdRef = useRef(0);
-  // Previous dbUserId, compared each render to detect identity changes
-  // (login, logout, or switching between two accounts) — see the effect
-  // below.
-  const previousDbUserIdRef = useRef<string | null>(null);
+  // Previous authUserId (Supabase auth identity), compared each render to
+  // detect a REAL identity change (login, logout, or switching between two
+  // accounts) — see the effect below. Deliberately keyed off authUserId, NOT
+  // dbUserId: dbUserId is an async /me REST fetch that can still reflect the
+  // previous identity for a moment after auth itself has already switched,
+  // which would let a native intent handler's late response write into the
+  // new session if this boundary waited for dbUserId instead.
+  const previousAuthUserIdRef = useRef<string | null>(null);
   // A media/connection failure the app has already *decided* is real (mic
   // denied, LiveKit connection dead) but hasn't necessarily gotten the
   // server to acknowledge yet — persists across a POST /fail failure AND a
@@ -210,6 +295,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // no longer applies (see resetToIdle).
   const pendingMediaFailureRef = useRef<{ callId: string; reason: CallFailureReason } | null>(null);
   const mediaFailureRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Suppresses a redundant native CallKit "end this call" round trip
+  // (see applyTerminalOutcome below) for a callId whose termination this
+  // device's own native intent handler (handleNativeEnd) just caused —
+  // CallKit already knows in that case, since the user acted on its own
+  // system UI to get here. Keyed by callId only (a fresh call always mints
+  // a fresh UUID, so no cross-call collision risk), value is the epoch ms
+  // the marker expires at. Consumed (deleted) on first check regardless of
+  // whether it was still valid, so it can never permanently swallow a
+  // later, genuinely-unrelated terminal sync for the same callId.
+  const nativeEndSuppressionRef = useRef<Map<string, number>>(new Map());
   // Breaks the mutual-recursion cycle between scheduleMediaFailureRetry and
   // attemptMediaFailureReport (the retry timer needs to call the attempt
   // function, which schedules further retries) — see the definitions below.
@@ -233,6 +328,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
     (callId: string, requestId: number, generation: number) => Promise<void>
   >(async () => {});
 
+  // The callId the App-Accept -> CallKit answerIncomingCall sync has already
+  // run for (see acceptCall/shouldSyncAnswerIncomingCall below) — only one
+  // call can be active at a time, so a single "last synced callId" (reset on
+  // resetToIdle), not a growing set, is sufficient and never leaks memory
+  // across a long-running app session.
+  const answerIncomingCallSyncedForRef = useRef<string | null>(null);
+
   const clearPoll = useCallback(() => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
@@ -251,6 +353,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
     // must not be able to write back into whatever (or whoever) comes next.
     tokenRequestRef.current = null;
     lifecycleActionInFlightRef.current = null;
+    // Same reasoning for an in-flight accept attempt — logout, an account
+    // switch, or any other terminal cleanup must make it immediately
+    // ineligible (isAcceptMarkerStillValid checks acceptInFlightRef), and a
+    // brand-new attempt for whatever comes next must never see a stale one
+    // still "holding" the lock.
+    acceptInFlightRef.current = null;
+    acceptInFlightPromiseRef.current = null;
     // Likewise for a pending media-failure report or pending confirmation
     // and their retry timers — this call/identity is gone, so retrying
     // against it (or writing its result back) no longer makes sense.
@@ -264,6 +373,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
       clearTimeout(confirmRetryTimerRef.current);
       confirmRetryTimerRef.current = null;
     }
+    // This call/identity is gone — stop tracking it as a CallKit-managed call
+    // (a no-op via resolveCallKitManagedCallEnd if nothing was tracked) and
+    // let a future call's App-Accept sync run fresh rather than seeing a
+    // stale "already synced" callId from whatever this session's last call
+    // was.
+    setCallKitAudioState(prev => resolveCallKitManagedCallEnd(prev));
+    answerIncomingCallSyncedForRef.current = null;
     setActiveCall(null);
     setPhase('idle');
   }, [clearPoll]);
@@ -275,44 +391,244 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (!accessToken) resetToIdle();
   }, [accessToken, resetToIdle]);
 
-  // Identity-change cleanup: fires whenever dbUserId actually changes —
-  // login, logout, or switching between two accounts. Bumping the
-  // generation here (before anything else) is what invalidates any
-  // recovery request already in flight for the previous identity,
-  // including the ABA case where dbUserId goes A -> B -> A and a slow
-  // request from the *first* A session must not be mistaken for one
-  // belonging to the second. The actual teardown (poll, timers, activeCall,
-  // in-flight markers) only runs for a real switch/logout, not the initial
-  // mount (previous === null).
+  // Identity-change cleanup: fires whenever authUserId (the Supabase auth
+  // identity) actually changes — login, logout, or switching between two
+  // accounts. Bumping the generation here (before anything else) is what
+  // invalidates any recovery request or native intent handler already in
+  // flight for the previous identity, including the ABA case where
+  // authUserId goes A -> B -> A and a slow request from the *first* A
+  // session must not be mistaken for one belonging to the second. The
+  // actual teardown (poll, timers, activeCall, in-flight markers) only runs
+  // for a real switch/logout, not the initial mount (previous === null) —
+  // authUserId starts at null before AuthProvider's initial getSession()
+  // resolves, so a fresh app start landing on an already-logged-in session
+  // is a baseline, not a "switch away from nothing" that needs a reset.
+  //
+  // Deliberately the ONLY identity-cleanup effect in this file — previously
+  // this same job was keyed off dbUserId (the async /me profile fetch);
+  // that effect has been replaced (not duplicated) by this one so a single
+  // switch is never bumped/reset twice. dbUserId retains its own separate
+  // effects below (recovery trigger, Realtime subscription) since those
+  // need the resolved profile id itself, not just the identity boundary.
   //
   // This effect deliberately does NOT itself call recovery for the new
   // identity — see the next effect below for why that has to happen on a
   // separate render.
   useEffect(() => {
-    const previous = previousDbUserIdRef.current;
-    previousDbUserIdRef.current = dbUserId;
-    if (previous === dbUserId) return;
+    const previous = previousAuthUserIdRef.current;
+    previousAuthUserIdRef.current = authUserId;
+    if (previous === authUserId) return;
 
     recoveryGenerationRef.current += 1;
 
     if (previous !== null) {
       resetToIdle();
     }
-  }, [dbUserId, resetToIdle]);
+  }, [authUserId, resetToIdle]);
+
+  // Snapshot of everything a native intent handler (handleNativeIncoming/
+  // handleNativeAnswer/handleNativeEnd) must capture BEFORE its first await,
+  // and re-validate after every subsequent one — the shared identity guard
+  // requested for Gate Review blocker 1. Three checks, not just
+  // recoveryGenerationRef alone: authUserId is the actual security boundary
+  // (updates the instant auth switches, see the effect above); generation is
+  // the ABA-safe counter tied to it; dbUserId is re-checked too since it's
+  // what the handler actually used to resolve caller/callee roles, and it
+  // must not have drifted out from under that resolution even in the
+  // (should-be-impossible) case where it changes independently of authUserId.
+  type NativeIntentSession = { authUserId: string | null; generation: number; dbUserId: string | null };
+
+  const captureNativeIntentSession = useCallback((): NativeIntentSession => ({
+    authUserId: authUserIdRef.current,
+    generation: recoveryGenerationRef.current,
+    dbUserId: dbUserIdRef.current,
+  }), []);
+
+  const isNativeIntentSessionStillValid = useCallback((session: NativeIntentSession): boolean => {
+    return (
+      authUserIdRef.current === session.authUserId &&
+      recoveryGenerationRef.current === session.generation &&
+      dbUserIdRef.current === session.dbUserId
+    );
+  }, []);
+
+  // acceptCallAction's own late-response marker — shared by BOTH the plain
+  // UI "Accept" button (context value's `acceptCall`) and
+  // handleNativeAnswer, since both call the exact same acceptCallAction
+  // function below; fixing it here protects both call sites without a
+  // second copy of this logic. Extends NativeIntentSession (identity) with
+  // the callId the accept was actually issued for and a requestId unique to
+  // THIS attempt, because identity staying the same is not enough — a late
+  // accept response must not resurrect a call that has since ended/been
+  // reset/been replaced by a different one, AND a concurrent second attempt
+  // for the exact same call (the plain UI Accept button racing
+  // handleNativeAnswer, or vice versa) must be tracked as a distinct
+  // attempt so only one of them is ever allowed to be "the" authoritative
+  // in-flight request — see acceptInFlightRef/stillHoldsAcceptMarker below.
+  type AcceptMarker = NativeIntentSession & { callId: string; requestId: number };
+
+  const nextAcceptRequestIdRef = useRef(0);
+  // The single accept attempt currently recognized as authoritative for
+  // whichever (callId, identity generation) it was minted for. A second
+  // acceptCallAction() call for the SAME callId + SAME generation reuses
+  // this attempt (see acceptCallAction) instead of sending a second
+  // POST /accept; `finally` only clears this if it still holds exactly this
+  // marker (stillHoldsAcceptMarker), so a newer attempt (a different
+  // requestId, possibly a different identity generation after a switch, or
+  // resetToIdle already clearing it outright) is never wiped by an older
+  // one settling late.
+  const acceptInFlightRef = useRef<AcceptMarker | null>(null);
+  // The in-flight attempt's own Promise, kept alongside acceptInFlightRef
+  // purely so a second, deduped caller can await the exact same outcome
+  // (and therefore the same setActiveCall/setPhase/ensureLiveKitToken, or
+  // lack thereof) instead of racing a redundant POST.
+  const acceptInFlightPromiseRef = useRef<Promise<void> | null>(null);
+
+  const captureAcceptMarker = useCallback(
+    (callId: string, requestId: number): AcceptMarker => ({ ...captureNativeIntentSession(), callId, requestId }),
+    [captureNativeIntentSession]
+  );
+
+  // Narrow ownership check: does acceptInFlightRef still literally hold
+  // THIS exact marker? Deliberately separate from isAcceptMarkerStillValid
+  // below (which also folds in call/role/terminal checks that are
+  // irrelevant to lock *ownership*) — used specifically to decide whether
+  // `finally` may release the lock without risking clearing a newer
+  // attempt's marker out from under it.
+  const stillHoldsAcceptMarker = useCallback((marker: AcceptMarker): boolean => {
+    const held = acceptInFlightRef.current;
+    return (
+      !!held &&
+      held.callId === marker.callId &&
+      held.requestId === marker.requestId &&
+      held.generation === marker.generation &&
+      held.authUserId === marker.authUserId &&
+      held.dbUserId === marker.dbUserId
+    );
+  }, []);
+
+  const isAcceptMarkerStillValid = useCallback(
+    (marker: AcceptMarker): boolean => {
+      if (!isNativeIntentSessionStillValid(marker)) return false;
+      const current = activeCallRef.current;
+      if (!current || current.call.id !== marker.callId || current.role !== 'callee') return false;
+      // Even with identity unchanged and the same call still active locally,
+      // a concurrent signal (Realtime/poll/another native intent) may have
+      // already moved this exact call to a terminal status while this
+      // accept attempt was in flight — applyTerminalOutcome will already
+      // have run for it via that other path, so resurrecting it here would
+      // both be wrong and redundantly re-fire toast/native-end side effects.
+      if (TERMINAL_STATUSES.has(current.call.status)) return false;
+      // And it must still be the exact attempt acceptInFlightRef recognizes
+      // as authoritative — if a concurrent second acceptCallAction() call
+      // deduped onto (i.e. is awaiting) this same attempt, that's fine (it
+      // shares this marker), but a genuinely NEWER attempt (different
+      // requestId) must be the only one allowed to act.
+      return stillHoldsAcceptMarker(marker);
+    },
+    [isNativeIntentSessionStillValid, stillHoldsAcceptMarker]
+  );
+
+  // Marks `callId` so the next applyTerminalOutcome for it skips notifying
+  // native CallKit — used right before delegating a native-originated
+  // endCall intent into decline/cancel/end, since CallKit already knows
+  // (the user just acted on its own system UI to produce that intent in
+  // the first place). Guards against a programmatic-end -> endCall-event ->
+  // REST-action feedback loop even though this SDK's outbound
+  // reportEndCallWithUUID/endCall calls do not appear to re-emit a JS
+  // `endCall` event in practice — cheap insurance either way.
+  const suppressNativeEndSync = useCallback((callId: string) => {
+    nativeEndSuppressionRef.current.set(callId, Date.now() + NATIVE_END_SUPPRESSION_MS);
+  }, []);
+
+  // Consume-once: returns true (and always deletes the entry, valid or not)
+  // if `callId`'s termination was already caused by processing a native
+  // endCall intent moments ago. A single check-and-delete means this can
+  // never permanently swallow a later, unrelated terminal sync attempt for
+  // the same callId (new calls always mint a fresh UUID anyway, so that
+  // scenario is purely defensive).
+  const consumeNativeEndSuppression = useCallback((callId: string) => {
+    const expiresAt = nativeEndSuppressionRef.current.get(callId);
+    nativeEndSuppressionRef.current.delete(callId);
+    return typeof expiresAt === 'number' && expiresAt > Date.now();
+  }, []);
+
+  // Called by handleNativeIncoming/handleNativeAnswer the instant either
+  // confirms `callId` as a call CallKit actually displayed — starts (or
+  // continues) tracking it in callKitAudioState (see
+  // resolveCallKitManagedCallStart), and retroactively flips
+  // activeCall.isCallKitManaged to true if a LOCAL record for this exact call
+  // already existed (e.g. established a moment earlier by recoverActiveCall/
+  // refreshIncoming, which don't go through the coordinator's native path and
+  // so default it to false) rather than only ever setting it on a freshly
+  // constructed ActiveCall literal.
+  const markCallKitManaged = useCallback((callId: string) => {
+    setCallKitAudioState(prev => resolveCallKitManagedCallStart(prev, callId));
+    setActiveCall(prev =>
+      prev && prev.call.id === callId && !prev.isCallKitManaged ? { ...prev, isCallKitManaged: true } : prev
+    );
+  }, []);
+
+  // Called by the coordinator the instant it sees a legal callId from a
+  // native incoming/didDisplay/answer event — BEFORE handleNativeIncoming/
+  // handleNativeAnswer's own REST GET has even started, let alone completed.
+  // This is what lets a didActivateAudioSession that arrives while that GET
+  // is still in flight land on the right callId (previously, tracking only
+  // started AFTER the GET succeeded, so an activate arriving earlier found
+  // nothing tracked and was silently dropped — see
+  // resolveCallKitAudioActivation's managedCallId===null guard). Only ever
+  // starts audio tracking — never creates activeCall, requests a LiveKit
+  // token, or calls accept.
+  const handleNativeCallKitCallIdSeen = useCallback((callId: string) => {
+    setCallKitAudioState(prev => resolveCallKitManagedCallStart(prev, callId));
+  }, []);
+
+  // Clears the tracking handleNativeCallKitCallIdSeen/markCallKitManaged
+  // started, but ONLY if it's still tracking this exact callId (never a
+  // different, still-valid call) — used at every point REST validation
+  // definitively rules this callId out (404/non-participant, terminal,
+  // identity switched) so a later stray didActivateAudioSession for it can't
+  // resurrect a private-call audio authorization for a call that's gone.
+  const clearCallKitTrackingIfMatches = useCallback((callId: string) => {
+    setCallKitAudioState(prev => (prev.managedCallId === callId ? resolveCallKitManagedCallEnd(prev) : prev));
+  }, []);
 
   const applyTerminalOutcome = useCallback(
     (call: CallSummary, role: 'caller' | 'callee') => {
-      setActiveCall({ call, livekit: null, role });
+      // isCallKitManaged is irrelevant from here on — the call is terminal,
+      // VoiceCallModal renders PreConnectScreen (livekit: null) rather than
+      // ConnectedCallScreen for it, and resetToIdle (scheduled below) clears
+      // callKitAudioState/activeCall shortly regardless.
+      setActiveCall({ call, livekit: null, role, isCallKitManaged: false });
       setPhase(call.status === 'FAILED' ? 'failed' : 'ended');
       clearPoll();
 
       const toast = terminalToastFor(call);
       if (toast) showToast(toast.message, toast.type);
 
+      // The server records a SYSTEM message for this call's outcome (see
+      // recordCallOutcomeMessage in apps/backend/src/lib/calls.ts), but
+      // nothing else on this device will have observed that insert unless
+      // this match's chat screen happens to already be open (its own
+      // Realtime subscription is what normally drives chatNeedsRefresh —
+      // see registerIncomingMessage). Every call this device is a party to
+      // reaches applyTerminalOutcome regardless of which screen is open, so
+      // this is the one place that can reliably tell the chat list to
+      // refresh and pick up the new last-message/unread state.
+      markChatNeedsRefresh(call.matchId);
+
       if (terminalTimerRef.current) clearTimeout(terminalTimerRef.current);
       terminalTimerRef.current = setTimeout(resetToIdle, TERMINAL_DISPLAY_MS);
+
+      // Keep native CallKit in sync with the server's terminal truth —
+      // unless this exact termination is the one CallKit's own end/decline
+      // action just caused (see suppressNativeEndSync/handleNativeEnd).
+      // No-op on Android/Expo Go/when the native module isn't linked.
+      if (!consumeNativeEndSuppression(call.id)) {
+        endNativeCallKitCall(call.id, call.status === 'FAILED' ? 'failed' : call.status === 'MISSED' ? 'unanswered' : 'remoteEnded');
+      }
     },
-    [clearPoll, resetToIdle]
+    [clearPoll, resetToIdle, consumeNativeEndSuppression]
   );
 
   // Fetches LiveKit credentials for an ACCEPTED call, exactly once per call:
@@ -345,7 +661,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
           if (!latest || latest.call.id !== call.id || latest.livekit || latest.call.status !== 'ACCEPTED') {
             return;
           }
-          setActiveCall({ call: latest.call, livekit, role: latest.role });
+          setActiveCall({ call: latest.call, livekit, role: latest.role, isCallKitManaged: latest.isCallKitManaged });
         } catch {
           // transient — the next poll/realtime tick still sees !livekit and
           // will call this again
@@ -383,7 +699,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      setActiveCall({ call, livekit: current.livekit, role: current.role });
+      setActiveCall({ call, livekit: current.livekit, role: current.role, isCallKitManaged: current.isCallKitManaged });
 
       if (call.status === 'ACCEPTED') {
         setPhase(prev => (prev === 'connected' || prev === 'reconnecting' ? prev : 'connecting'));
@@ -399,15 +715,23 @@ export function CallProvider({ children }: { children: ReactNode }) {
   // whose accept actually succeeded server-side (caller already sees
   // ACCEPTED and is connecting) doesn't silently fall back to idle while the
   // caller proceeds, which would split the two sides' call state.
+  //
+  // Takes the SAME AcceptMarker the failed acceptCallAction attempt already
+  // captured, rather than deriving a fresh one here — capturing a new one
+  // after the failure would read whatever identity/activeCall happens to be
+  // current at that later moment, which could already belong to a different
+  // session/call than the one this reconciliation is actually about.
   const reconcileAfterAcceptFailure = useCallback(
-    async (callId: string) => {
+    async (callId: string, marker: AcceptMarker) => {
       const token = accessTokenRef.current;
       if (!token) return;
+      if (!isAcceptMarkerStillValid(marker)) return; // before issuing the reconciliation GET
 
       let call: CallSummary;
       try {
         call = await getCallApi(token, callId);
       } catch {
+        if (!isAcceptMarkerStillValid(marker)) return; // before the retry-toast/setPhase side effect
         // The reconciliation read itself failed too (still no network). Do
         // not assume the call is gone — keep the current incoming-call UI
         // up and let the ringing poll loop keep retrying.
@@ -418,6 +742,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         showToast('Connection issue — retrying…', 'error');
         return;
       }
+      if (!isAcceptMarkerStillValid(marker)) return; // before applying the GET result
 
       const current = activeCallRef.current;
       if (!current || current.call.id !== callId) return;
@@ -431,7 +756,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         // The accept actually landed server-side despite the client-visible
         // error — adopt the ACCEPTED state instead of diverging from the
         // caller, who will have observed the same ACCEPTED state.
-        setActiveCall({ call, livekit: current.livekit, role: current.role });
+        setActiveCall({ call, livekit: current.livekit, role: current.role, isCallKitManaged: current.isCallKitManaged });
         setPhase(prev => (prev === 'connected' || prev === 'reconnecting' ? prev : 'connecting'));
         if (!current.livekit) ensureLiveKitToken(call, current.role);
         return;
@@ -440,11 +765,11 @@ export function CallProvider({ children }: { children: ReactNode }) {
       // Still RINGING — the accept genuinely never landed. Restore the
       // incoming-call UI so the user can retry, with a clear error instead
       // of silently vanishing.
-      setActiveCall({ call, livekit: null, role: current.role });
+      setActiveCall({ call, livekit: null, role: current.role, isCallKitManaged: current.isCallKitManaged });
       setPhase('incomingRinging');
       showToast('Could not accept the call — please try again', 'error');
     },
-    [applyTerminalOutcome, ensureLiveKitToken]
+    [isAcceptMarkerStillValid, applyTerminalOutcome, ensureLiveKitToken]
   );
 
   const refreshIncoming = useCallback(async () => {
@@ -461,7 +786,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const incoming = calls[0];
     if (!incoming || activeCallRef.current) return;
 
-    setActiveCall({ call: incoming, livekit: null, role: 'callee' });
+    setActiveCall({ call: incoming, livekit: null, role: 'callee', isCallKitManaged: false });
     setPhase('incomingRinging');
   }, []);
 
@@ -516,13 +841,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
       const role: 'caller' | 'callee' = call.caller.id === userId ? 'caller' : 'callee';
 
       if (call.status === 'RINGING') {
-        setActiveCall({ call, livekit: null, role });
+        setActiveCall({ call, livekit: null, role, isCallKitManaged: false });
         setPhase(role === 'caller' ? 'outgoingRinging' : 'incomingRinging');
         return;
       }
 
       if (call.status === 'ACCEPTED') {
-        setActiveCall({ call, livekit: null, role });
+        setActiveCall({ call, livekit: null, role, isCallKitManaged: false });
         setPhase('connecting');
         ensureLiveKitToken(call, role);
       }
@@ -681,37 +1006,103 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
     try {
       const call = await startCallApi(token, matchId);
-      setActiveCall({ call, livekit: null, role: 'caller' });
+      setActiveCall({ call, livekit: null, role: 'caller', isCallKitManaged: false });
       setPhase('outgoingRinging');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Could not start call', 'error');
     }
   }, []);
 
-  const acceptCallAction = useCallback(async () => {
+  // Shared by the plain UI "Accept" button (exposed as `acceptCall` on the
+  // context value) AND handleNativeAnswer, which calls this exact function
+  // — fixing the late-response/concurrency protection here covers both call
+  // sites without a second copy of it.
+  //
+  // Concurrency: a duplicate UI tap racing handleNativeAnswer (or vice
+  // versa) for the SAME still-RINGING call must never send a second
+  // POST /accept — acceptInFlightRef/acceptInFlightPromiseRef dedupe onto
+  // the one authoritative attempt, and the second caller awaits that exact
+  // same Promise (so handleNativeAnswer's own confirm-GET afterward still
+  // only runs once the one real accept has fully settled).
+  //
+  // Late-response protection: the marker is captured ONCE per NEW attempt,
+  // before the POST /accept even starts, and re-validated after every
+  // subsequent await (isAcceptMarkerStillValid — identity, callId/role/
+  // non-terminal, AND still-held-in-flight-lock ownership) before any of
+  // setActiveCall/setPhase/ensureLiveKitToken/reconcileAfterAcceptFailure
+  // runs. Without this, a slow accept response landing after an identity
+  // switch (resetToIdle already cleared activeCall AND the lock) — or after
+  // this same identity's activeCall simply moved on to a different call, or
+  // after a NEWER accept attempt has taken over the lock — could still
+  // resurrect stale ACCEPTED state on top of whatever the session has since
+  // moved on to.
+  const acceptCallAction = useCallback((): Promise<void> => {
     const token = accessTokenRef.current;
     const current = activeCallRef.current;
-    if (!token || !current || current.role !== 'callee') return;
+    if (!token || !current || current.role !== 'callee') return Promise.resolve();
 
     const callId = current.call.id;
-    setPhase('accepting');
-    try {
-      // acceptCall is now a pure state transition — it never carries LiveKit
-      // credentials. Enter 'connecting' immediately on the ACCEPTED result,
-      // then fetch credentials separately via ensureLiveKitToken.
-      const result = await acceptCallApi(token, callId);
-      setActiveCall({ call: result, livekit: null, role: 'callee' });
-      setPhase('connecting');
-      ensureLiveKitToken(result, 'callee');
-    } catch {
-      // Do not assume the accept never landed — a network error or a
-      // dropped response can happen after the server already recorded
-      // ACCEPTED. Reconcile against the server instead of resetting to
-      // idle, which would otherwise split this side's state from the
-      // caller's (who may already have observed ACCEPTED).
-      await reconcileAfterAcceptFailure(callId);
+    const generation = recoveryGenerationRef.current;
+
+    // Reuse an already in-flight attempt for the SAME call under the SAME
+    // identity generation instead of sending a second POST /accept.
+    const existing = acceptInFlightRef.current;
+    if (existing && existing.callId === callId && existing.generation === generation) {
+      return acceptInFlightPromiseRef.current ?? Promise.resolve();
     }
-  }, [ensureLiveKitToken, reconcileAfterAcceptFailure]);
+
+    const requestId = ++nextAcceptRequestIdRef.current;
+    const marker = captureAcceptMarker(callId, requestId);
+
+    const attempt = (async () => {
+      setPhase('accepting');
+      try {
+        // acceptCall is now a pure state transition — it never carries
+        // LiveKit credentials. Enter 'connecting' immediately on the
+        // ACCEPTED result, then fetch credentials separately via
+        // ensureLiveKitToken.
+        const result = await acceptCallApi(token, callId);
+        if (!isAcceptMarkerStillValid(marker)) return; // superseded while the POST was in flight — do not resurrect
+
+        // Preserve whatever LiveKit credentials/connected-or-better phase a
+        // concurrent signal (Realtime/poll, or the dedup above having let a
+        // second caller observe this same attempt) may already have
+        // established for this exact call — never null out credentials
+        // that already exist, and never regress connected/reconnecting back
+        // to connecting.
+        const latest = activeCallRef.current;
+        const preservedLivekit = latest?.call.id === callId ? latest.livekit : null;
+        const preservedIsCallKitManaged = latest?.call.id === callId ? latest.isCallKitManaged : false;
+        setActiveCall({ call: result, livekit: preservedLivekit, role: 'callee', isCallKitManaged: preservedIsCallKitManaged });
+        setPhase(prev => (prev === 'connected' || prev === 'reconnecting' ? prev : 'connecting'));
+        if (!preservedLivekit) ensureLiveKitToken(result, 'callee');
+      } catch {
+        if (!isAcceptMarkerStillValid(marker)) return; // superseded — do not even attempt reconciliation for a stale session
+        // Do not assume the accept never landed — a network error or a
+        // dropped response can happen after the server already recorded
+        // ACCEPTED. Reconcile against the server instead of resetting to
+        // idle, which would otherwise split this side's state from the
+        // caller's (who may already have observed ACCEPTED). Passes the SAME
+        // marker along rather than letting reconcileAfterAcceptFailure
+        // capture a fresh one after the fact.
+        await reconcileAfterAcceptFailure(callId, marker);
+      } finally {
+        // Only release the lock if it's still exactly this attempt's marker
+        // — a newer attempt (a different requestId, possibly a different
+        // identity generation after a switch) or resetToIdle already having
+        // cleared it outright must never have its lock cleared by this one
+        // settling late.
+        if (stillHoldsAcceptMarker(marker)) {
+          acceptInFlightRef.current = null;
+          acceptInFlightPromiseRef.current = null;
+        }
+      }
+    })();
+
+    acceptInFlightRef.current = marker;
+    acceptInFlightPromiseRef.current = attempt;
+    return attempt;
+  }, [captureAcceptMarker, isAcceptMarkerStillValid, stillHoldsAcceptMarker, ensureLiveKitToken, reconcileAfterAcceptFailure]);
 
   // Reconciles decline/cancel/end against the Call row — the single source
   // of truth — after that action's own request fails, times out, 409s, or
@@ -817,7 +1208,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         // The action never actually landed — restore the ringing UI (with
         // cancel/decline still available) so the user can retry, instead of
         // silently vanishing while the other side is still ringing/waiting.
-        setActiveCall({ call, livekit: null, role: current.role });
+        setActiveCall({ call, livekit: null, role: current.role, isCallKitManaged: current.isCallKitManaged });
         setPhase(current.role === 'caller' ? 'outgoingRinging' : 'incomingRinging');
         return;
       }
@@ -827,7 +1218,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         // connecting/connected/reconnecting matches the current media
         // state instead of the phase this action was trying to leave.
         // Existing LiveKit credentials must not be dropped.
-        setActiveCall({ call, livekit: current.livekit, role: current.role });
+        setActiveCall({ call, livekit: current.livekit, role: current.role, isCallKitManaged: current.isCallKitManaged });
         setPhase(prev => (prev === 'connected' || prev === 'reconnecting' ? prev : 'connecting'));
         if (!current.livekit) ensureLiveKitToken(call, current.role);
       }
@@ -1082,10 +1473,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
 
       if (call.status === 'RINGING') {
-        setActiveCall({ call, livekit: null, role: current.role });
+        setActiveCall({ call, livekit: null, role: current.role, isCallKitManaged: current.isCallKitManaged });
         setPhase(current.role === 'caller' ? 'outgoingRinging' : 'incomingRinging');
       } else if (call.status === 'ACCEPTED') {
-        setActiveCall({ call, livekit: current.livekit, role: current.role });
+        setActiveCall({ call, livekit: current.livekit, role: current.role, isCallKitManaged: current.isCallKitManaged });
         setPhase(prev => (prev === 'connected' || prev === 'reconnecting' ? prev : 'connecting'));
         if (!current.livekit) ensureLiveKitToken(call, current.role);
       }
@@ -1356,6 +1747,499 @@ export function CallProvider({ children }: { children: ReactNode }) {
     await attemptConfirmCallOrFail(callId, requestId, generation);
   }, [attemptConfirmCallOrFail]);
 
+  // ---------------------------------------------------------------------------
+  // CallKit audio-session activation forwarding + private-call audio
+  // authorization (Gate requirement — see lib/callAudioCoordinator.ts for the
+  // full design rationale). No callId of their own; they just poke the
+  // CallKit-audio state machine, which is the only thing that carries
+  // call-scoped meaning (via managedCallId/generation).
+  // ---------------------------------------------------------------------------
+
+  const handleNativeAudioSessionActivated = useCallback(() => {
+    setCallKitAudioState(prev => resolveCallKitAudioActivation(prev));
+  }, []);
+
+  const handleNativeAudioSessionDeactivated = useCallback(() => {
+    setCallKitAudioState(prev => resolveCallKitAudioDeactivation(prev));
+  }, []);
+
+  // Whether components/voice-call-modal.tsx may let LiveKitRoom actually
+  // connect right now. Always true once there's no activeCall at all (no
+  // call to gate) or the active call never went through CallKit.
+  const isPrivateCallAudioAuthorized = activeCall
+    ? resolveIsPrivateCallAudioAuthorized({
+        isCallKitManaged: activeCall.isCallKitManaged,
+        callKitAudio: callKitAudioState,
+        callId: activeCall.call.id,
+      })
+    : true;
+
+  // ---------------------------------------------------------------------------
+  // App-Accept -> CallKit answerIncomingCall sync (Gate requirement, section
+  // three) — the plain UI "Accept" button's own entry point (exposed as
+  // `acceptCall` below), NOT handleNativeAnswer (which calls acceptCallAction
+  // directly, unwrapped) — that asymmetry alone is what prevents a
+  // CallKit-originated answer from ever echoing back into
+  // answerIncomingCall; see lib/callAudioCoordinator.ts's
+  // shouldSyncAnswerIncomingCall doc comment.
+  // ---------------------------------------------------------------------------
+
+  const acceptCall = useCallback(async () => {
+    const current = activeCallRef.current;
+    if (!current) return;
+
+    const callId = current.call.id;
+    const generation = recoveryGenerationRef.current;
+    const capturedAuthUserId = authUserIdRef.current;
+    // isCallKitManaged is a local, device-only flag — GET /calls/:callId
+    // never returns it, so (unlike call.status below) it cannot be
+    // re-confirmed against the server. Captured here, BEFORE any await,
+    // rather than read from activeCallRef.current afterward: activeCallRef
+    // only re-syncs to a fresh value on CallProvider's NEXT render (see its
+    // per-render `activeCallRef.current = activeCall` assignment), which is
+    // not guaranteed to have committed yet immediately after an awaited
+    // Promise resolves — reading it post-await here would risk seeing a
+    // stale isCallKitManaged (or stale call.status) rather than this exact
+    // call's real state.
+    const wasCallKitManaged = current.isCallKitManaged;
+
+    const identityStillValid = () =>
+      recoveryGenerationRef.current === generation && authUserIdRef.current === capturedAuthUserId;
+
+    // acceptCallAction already handles dedup/late-response/reconciliation in
+    // full (see its own extensive comments) — this wrapper only adds a
+    // best-effort CallKit sync AFTER it settles, never changing its own
+    // accept/reconcile behavior, and never trusting acceptCallAction's own
+    // internal state writes as proof of the server's real status.
+    await acceptCallAction();
+    if (!identityStillValid()) return;
+
+    const token = accessTokenRef.current;
+    if (!token) return;
+
+    // The authoritative confirmation this sync needs: not activeCallRef
+    // (which may not reflect acceptCallAction's outcome yet), but a fresh,
+    // independent GET — the same "REST is the only source of truth" rule
+    // every other native/App entry point in this file already follows.
+    let call: CallSummary;
+    try {
+      call = await getCallApi(token, callId);
+    } catch {
+      return; // GET failed — never sync on an unconfirmed status; nothing else to clean up
+    }
+    if (!identityStillValid()) return;
+
+    const decision = shouldSyncAnswerIncomingCall({
+      alreadySyncedCallId: answerIncomingCallSyncedForRef.current,
+      targetCallId: callId,
+      isIdentityStillValid: identityStillValid(),
+      isCallKitManaged: wasCallKitManaged,
+      callStatus: call.status,
+    });
+    if (!decision) return;
+
+    // Mark synced BEFORE the (fire-and-forget) native call — "at most once"
+    // even if answerIncomingCallKitCall itself is slow, and a failure inside
+    // it (swallowed internally — see lib/voipPushKit.ts) can never roll this
+    // back or touch phase/activeCall, so it can never turn an already-
+    // server-confirmed ACCEPTED call into a failure.
+    answerIncomingCallSyncedForRef.current = callId;
+    void answerIncomingCallKitCall(callId);
+  }, [acceptCallAction]);
+
+  // ---------------------------------------------------------------------------
+  // Native intent entry points (iOS PushKit/CallKit coordinator) — see
+  // docs/private-voice-calling-spec.md "iOS 原生能力". GET /calls/:callId is
+  // the only source of truth for what a native payload/event *means*; none
+  // of these ever act on callerName/handle/role/status carried by the
+  // native side. Each re-validates against the server and then delegates
+  // into the existing action functions above rather than duplicating any
+  // state-machine logic, so all of their generation/identity/late-response
+  // protections apply for free.
+  // ---------------------------------------------------------------------------
+
+  const handleNativeIncoming = useCallback(
+    async (callId: string): Promise<NativeCallIntentResult> => {
+      if (!isValidCallId(callId)) return 'discarded';
+
+      // Captured before the only await below and re-checked immediately
+      // after it, before any React state or native CallKit side effect —
+      // same identity guard as handleNativeAnswer/handleNativeEnd (see
+      // captureNativeIntentSession/isNativeIntentSessionStillValid above).
+      const session = captureNativeIntentSession();
+      const token = accessTokenRef.current;
+      const userId = session.dbUserId;
+      if (!token || !userId) return 'retry';
+
+      let call: CallSummary;
+      try {
+        call = await getCallApi(token, callId);
+      } catch (error) {
+        if (!isNativeIntentSessionStillValid(session)) return 'discarded'; // identity switched — no stale-identity CallKit side effect
+        if (error instanceof ApiError && error.status === 404) {
+          // Non-participant or nonexistent call — never surface it, and
+          // make sure CallKit doesn't keep showing anything for it. The
+          // coordinator's enqueue-time handleNativeCallKitCallIdSeen already
+          // started tracking this callId for the audio-session gate before
+          // this REST validation even began — a definitive 404 means it
+          // must be cleared, never left dangling.
+          endNativeCallKitCall(callId, 'remoteEnded');
+          clearCallKitTrackingIfMatches(callId);
+          return 'discarded';
+        }
+        return 'retry'; // transient network error — the coordinator's pending queue retries; keep the audio tracking, this call may still be confirmed
+      }
+      if (!isNativeIntentSessionStillValid(session)) {
+        clearCallKitTrackingIfMatches(callId); // identity switched while this GET was in flight
+        return 'discarded';
+      }
+
+      if (call.caller.id !== userId && call.callee.id !== userId) {
+        // Should be unreachable (the backend itself 404s non-participants)
+        // — fail safe rather than ever act on a call this identity isn't
+        // part of.
+        endNativeCallKitCall(callId, 'remoteEnded');
+        clearCallKitTrackingIfMatches(callId);
+        return 'discarded';
+      }
+
+      if (TERMINAL_STATUSES.has(call.status)) {
+        // Do not resurrect app call UI for a call that's already over —
+        // just make sure CallKit's own UI (if still showing anything)
+        // closes. Not routed through applyTerminalOutcome/suppression:
+        // CallKit does not yet know this call is dead (it's mid-displaying
+        // an incoming call), so this is a genuine first notification, not
+        // a redundant one.
+        endNativeCallKitCall(
+          callId,
+          call.status === 'FAILED' ? 'failed' : call.status === 'MISSED' ? 'unanswered' : 'remoteEnded'
+        );
+        clearCallKitTrackingIfMatches(callId);
+        return 'discarded';
+      }
+
+      // This intent came from the coordinator's native CallKit path
+      // (didDisplayIncomingCall/its didLoadWithEvents replay, or the
+      // 'notification' PushKit event — either way, CallKit is/was displaying
+      // this callId) — start (or continue) tracking it for the private-call
+      // audio-session gate (idempotent/redundant with the coordinator's own
+      // enqueue-time handleNativeCallKitCallIdSeen call above, which is what
+      // lets a didActivateAudioSession arriving before this REST GET
+      // completes still land on the right callId), and retroactively mark
+      // an already-locally-established record (e.g. from recoverActiveCall)
+      // as CallKit-managed.
+      markCallKitManaged(callId);
+
+      const current = activeCallRef.current;
+      if (current) {
+        // Already established locally (e.g. a duplicate notification +
+        // didDisplayIncomingCall pair for the same call, or Realtime beat
+        // this intent to it) — idempotent no-op. A DIFFERENT call already
+        // active locally must never be clobbered by this one.
+        if (current.call.id !== callId) {
+          clearCallKitTrackingIfMatches(callId);
+          return 'discarded';
+        }
+        return 'handled';
+      }
+
+      // Resolve the *real* role from the server rather than assuming
+      // "incoming => I'm the callee" — a caller's own device receiving a
+      // spurious/misrouted incoming CallKit event must be reconciled
+      // against the true status/role, not shown as if it were incoming.
+      const role: 'caller' | 'callee' = call.caller.id === userId ? 'caller' : 'callee';
+
+      if (call.status === 'RINGING') {
+        setActiveCall({ call, livekit: null, role, isCallKitManaged: true });
+        setPhase(role === 'caller' ? 'outgoingRinging' : 'incomingRinging');
+        return 'handled';
+      }
+
+      if (call.status === 'ACCEPTED') {
+        setActiveCall({ call, livekit: null, role, isCallKitManaged: true });
+        setPhase('connecting');
+        ensureLiveKitToken(call, role);
+        return 'handled';
+      }
+
+      return 'handled';
+    },
+    [captureNativeIntentSession, isNativeIntentSessionStillValid, ensureLiveKitToken, markCallKitManaged, clearCallKitTrackingIfMatches]
+  );
+
+  const handleNativeAnswer = useCallback(
+    async (callId: string): Promise<NativeCallIntentResult> => {
+      if (!isValidCallId(callId)) return 'discarded';
+
+      // Captured before any await — every check below re-validates against
+      // it, so a login/logout/switch (authUserId/recoveryGenerationRef
+      // changing) that happens while this handler is mid-flight can never
+      // let a stale response write back into the new session (see
+      // runLifecycleAction's identical pattern above and
+      // captureNativeIntentSession/isNativeIntentSessionStillValid).
+      const session = captureNativeIntentSession();
+      const token = accessTokenRef.current;
+      const userId = session.dbUserId;
+      if (!token || !userId) return 'retry'; // coordinator queues this until auth is restored
+
+      let call: CallSummary;
+      try {
+        call = await getCallApi(token, callId);
+      } catch (error) {
+        if (!isNativeIntentSessionStillValid(session)) return 'discarded'; // identity switched — no stale-identity CallKit side effect
+        if (error instanceof ApiError && error.status === 404) {
+          endNativeCallKitCall(callId, 'remoteEnded');
+          clearCallKitTrackingIfMatches(callId);
+          return 'discarded';
+        }
+        return 'retry'; // transient network error — keep the audio tracking, this call may still be confirmed
+      }
+      if (!isNativeIntentSessionStillValid(session)) {
+        clearCallKitTrackingIfMatches(callId); // identity switched while this GET was in flight
+        return 'discarded';
+      }
+
+      if (call.callee.id !== userId) {
+        // Not this identity's call to answer (e.g. this device is the
+        // caller, or a non-participant) — close whatever CallKit is
+        // showing and give up.
+        endNativeCallKitCall(callId, 'remoteEnded');
+        clearCallKitTrackingIfMatches(callId);
+        return 'discarded';
+      }
+
+      if (TERMINAL_STATUSES.has(call.status)) {
+        // Already over server-side — never call accept. Just close out
+        // native UI (app UI was never opened for this by this handler).
+        endNativeCallKitCall(
+          callId,
+          call.status === 'FAILED' ? 'failed' : call.status === 'MISSED' ? 'unanswered' : 'remoteEnded'
+        );
+        clearCallKitTrackingIfMatches(callId);
+        return 'discarded';
+      }
+
+      // A different call already active locally (should be unreachable —
+      // the backend enforces one active RINGING/ACCEPTED call per user —
+      // but never risk clobbering it or wrong-acting on it if it somehow
+      // happens).
+      const existingActive = activeCallRef.current;
+      if (existingActive && existingActive.call.id !== callId) {
+        clearCallKitTrackingIfMatches(callId);
+        return 'discarded';
+      }
+
+      // CallKit's own answer action for this callId just fired — start (or
+      // continue) tracking it for the private-call audio-session gate. See
+      // handleNativeIncoming's identical call for why this also retroactively
+      // patches an already-established local record.
+      markCallKitManaged(callId);
+
+      if (call.status === 'ACCEPTED') {
+        // Idempotent success — already answered (e.g. a duplicate
+        // answerCall replay via didLoadWithEvents, or Realtime/poll beat
+        // this intent to accepting). Adopt ACCEPTED and make sure LiveKit
+        // credentials get fetched, without calling accept again.
+        const existingLivekit = existingActive?.call.id === callId ? existingActive.livekit : null;
+        const nextActiveCall: ActiveCall = { call, livekit: existingLivekit, role: 'callee', isCallKitManaged: true };
+        activeCallRef.current = nextActiveCall;
+        setActiveCall(nextActiveCall);
+        setPhase(prev => (prev === 'connected' || prev === 'reconnecting' ? prev : 'connecting'));
+        if (!existingLivekit) ensureLiveKitToken(call, 'callee');
+        return 'handled';
+      }
+
+      if (call.status !== 'RINGING') {
+        clearCallKitTrackingIfMatches(callId);
+        return 'discarded'; // unexpected status — nothing sensible to do
+      }
+
+      // Establish activeCallRef SYNCHRONOUSLY (a direct ref assignment, not
+      // only setActiveCall — which only takes effect on the next render)
+      // before delegating to acceptCallAction, whose very first line reads
+      // activeCallRef.current. Without this, acceptCallAction could read a
+      // stale/unrelated ref value and silently no-op instead of accepting
+      // — the "ref/internal helper convergence" this phase-3 task requires
+      // instead of guessing timing with setTimeout.
+      const nextActiveCall: ActiveCall = { call, livekit: null, role: 'callee', isCallKitManaged: true };
+      activeCallRef.current = nextActiveCall;
+      setActiveCall(nextActiveCall);
+
+      // acceptCallAction itself already handles the "POST /accept fails"
+      // case via reconcileAfterAcceptFailure's GET-based reconciliation —
+      // reused here as-is. It never throws and never tells us definitively
+      // whether the server actually transitioned to ACCEPTED, though — it
+      // only restores sensible local UI on failure. Do not report 'handled'
+      // just because this Promise resolved: confirm with our own
+      // authoritative read afterward.
+      await acceptCallAction();
+      if (!isNativeIntentSessionStillValid(session)) return 'discarded';
+
+      let confirmed: CallSummary | null = null;
+      let outcome: NativeCallIntentResult;
+      try {
+        confirmed = await getCallApi(token, callId);
+        outcome = resolveAnswerConfirmation({
+          networkError: false,
+          serverConfirmsAccepted: confirmed.status === 'ACCEPTED',
+          serverIsTerminal: TERMINAL_STATUSES.has(confirmed.status),
+        });
+      } catch {
+        // Still no network — the coordinator retries; a re-run safely
+        // re-POSTs accept if the call turns out to still be RINGING.
+        outcome = resolveAnswerConfirmation({ networkError: true });
+      }
+      if (!isNativeIntentSessionStillValid(session)) return 'discarded';
+
+      if (outcome === 'handled' && confirmed && confirmed.status !== 'ACCEPTED') {
+        // The accept genuinely never landed and the call ended some other
+        // way in the same window (e.g. the caller canceled) — make sure
+        // local state reflects it if the internal reconcile path hasn't
+        // already caught up.
+        const current = activeCallRef.current;
+        if (current?.call.id === callId && !TERMINAL_STATUSES.has(current.call.status)) {
+          applyTerminalOutcome(confirmed, 'callee');
+        }
+      }
+
+      return outcome;
+    },
+    [captureNativeIntentSession, isNativeIntentSessionStillValid, acceptCallAction, applyTerminalOutcome, ensureLiveKitToken, markCallKitManaged, clearCallKitTrackingIfMatches]
+  );
+
+  const handleNativeEnd = useCallback(
+    async (callId: string): Promise<NativeCallIntentResult> => {
+      if (!isValidCallId(callId)) return 'discarded';
+
+      // See handleNativeAnswer's identical comment above — captured before
+      // any await, re-checked after every one (authUserId + generation +
+      // dbUserId), so a late response can never write back into a session
+      // that has since switched.
+      const session = captureNativeIntentSession();
+      const token = accessTokenRef.current;
+      const userId = session.dbUserId;
+      if (!token || !userId) return 'retry';
+
+      let call: CallSummary;
+      try {
+        call = await getCallApi(token, callId);
+      } catch (error) {
+        if (!isNativeIntentSessionStillValid(session)) return 'discarded'; // identity switched — no stale-identity CallKit side effect
+        if (error instanceof ApiError && error.status === 404) {
+          endNativeCallKitCall(callId, 'remoteEnded');
+          return 'discarded';
+        }
+        return 'retry'; // network failure — coordinator retries; never resetToIdle directly
+      }
+      if (!isNativeIntentSessionStillValid(session)) return 'discarded';
+
+      if (call.caller.id !== userId && call.callee.id !== userId) {
+        endNativeCallKitCall(callId, 'remoteEnded');
+        return 'discarded';
+      }
+
+      if (TERMINAL_STATUSES.has(call.status)) {
+        // Already over server-side — idempotent. Clean up whichever of
+        // native/app UI is still showing this call, without invoking
+        // decline/cancel/end again.
+        if (activeCallRef.current?.call.id === callId) {
+          suppressNativeEndSync(callId); // this path already leads into applyTerminalOutcome below
+          applyTerminalOutcome(call, call.caller.id === userId ? 'caller' : 'callee');
+        } else {
+          endNativeCallKitCall(
+            callId,
+            call.status === 'FAILED' ? 'failed' : call.status === 'MISSED' ? 'unanswered' : 'remoteEnded'
+          );
+        }
+        return 'handled';
+      }
+
+      // A different call already active locally (should be unreachable —
+      // the backend enforces one active RINGING/ACCEPTED call per user —
+      // but never risk clobbering it or wrong-acting on it if it somehow
+      // happens).
+      const existingActive = activeCallRef.current;
+      if (existingActive && existingActive.call.id !== callId) {
+        return 'discarded';
+      }
+
+      const role: 'caller' | 'callee' = call.caller.id === userId ? 'caller' : 'callee';
+
+      // Synchronize activeCallRef before delegating — same reasoning as
+      // handleNativeAnswer above: decline/cancel/endCallAction all read
+      // activeCallRef.current as their very first step.
+      const nextActiveCall: ActiveCall = existingActive
+        ? { ...existingActive, call }
+        : { call, livekit: null, role, isCallKitManaged: true };
+      activeCallRef.current = nextActiveCall;
+      setActiveCall(nextActiveCall);
+
+      // CallKit already knows this call is ending — the user just acted on
+      // its system UI, which is why this intent exists. Suppress the
+      // reflexive native-end sync that applyTerminalOutcome will otherwise
+      // fire once the resulting terminal outcome lands, avoiding a
+      // redundant round trip back into CallKit for a call it already
+      // closed.
+      suppressNativeEndSync(callId);
+
+      if (call.status === 'RINGING') {
+        if (role === 'callee') {
+          await declineCallAction();
+        } else {
+          await cancelCallAction();
+        }
+      } else if (call.status === 'ACCEPTED') {
+        await endCallAction();
+      } else {
+        return 'discarded';
+      }
+
+      if (!isNativeIntentSessionStillValid(session)) return 'discarded';
+
+      // declineCallAction/cancelCallAction/endCallAction all route through
+      // runLifecycleAction, which never throws and only reconciles local UI
+      // on failure — it doesn't tell this handler definitively whether the
+      // server actually reached a terminal state. Confirm with our own
+      // authoritative read before ever reporting 'handled'.
+      let confirmed: CallSummary | null = null;
+      let outcome: NativeCallIntentResult;
+      try {
+        confirmed = await getCallApi(token, callId);
+        outcome = resolveEndConfirmation({ networkError: false, serverIsTerminal: TERMINAL_STATUSES.has(confirmed.status) });
+      } catch {
+        // Still no network — coordinator retries; a re-run safely re-sends
+        // the same idempotent decline/cancel/end.
+        outcome = resolveEndConfirmation({ networkError: true });
+      }
+      if (!isNativeIntentSessionStillValid(session)) return 'discarded';
+
+      if (outcome === 'handled' && confirmed) {
+        const latest = activeCallRef.current;
+        if (latest?.call.id === callId && !TERMINAL_STATUSES.has(latest.call.status)) {
+          // The internal reconcile path hasn't caught up yet — apply it
+          // ourselves. Re-suppress: CallKit's system UI already reflects
+          // the user's own end/decline/cancel action from moments ago, so a
+          // redundant native-end round trip is still unwanted here even
+          // though this particular confirmation read is the one noticing
+          // the terminal state.
+          suppressNativeEndSync(callId);
+          applyTerminalOutcome(confirmed, confirmed.caller.id === userId ? 'caller' : 'callee');
+        }
+      }
+
+      return outcome;
+    },
+    [
+      captureNativeIntentSession,
+      isNativeIntentSessionStillValid,
+      applyTerminalOutcome,
+      cancelCallAction,
+      declineCallAction,
+      endCallAction,
+      suppressNativeEndSync,
+    ]
+  );
+
   // CallProvider is mounted once above the auth-gated navigator and in
   // practice never unmounts (see the comment on the accessToken effect
   // above), but clear both retry timers on unmount defensively anyway —
@@ -1379,7 +2263,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         phase,
         activeCall,
         startCall,
-        acceptCall: acceptCallAction,
+        acceptCall,
         declineCall: declineCallAction,
         cancelCall: cancelCallAction,
         endCall: endCallAction,
@@ -1387,6 +2271,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
         reportMediaDisconnected,
         reportMediaFailure,
         confirmCallOrFail,
+        handleNativeIncoming,
+        handleNativeAnswer,
+        handleNativeEnd,
+        handleNativeAudioSessionActivated,
+        handleNativeAudioSessionDeactivated,
+        handleNativeCallKitCallIdSeen,
+        isPrivateCallAudioAuthorized,
       }}
     >
       {children}

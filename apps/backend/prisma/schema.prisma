@@ -3,9 +3,10 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  directUrl         = env("DIRECT_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model User {
@@ -19,6 +20,7 @@ model User {
   city                    String?
   createdAt               DateTime               @default(now()) @map("created_at")
   updatedAt               DateTime               @updatedAt @map("updated_at")
+  lastActiveAt            DateTime?              @map("last_active_at")
   supabaseAuthId          String                 @unique
   blocksReceived          Block[]                @relation("BlockedBlocks")
   blocksGiven             Block[]                @relation("BlockerBlocks")
@@ -44,6 +46,8 @@ model User {
   callsAsCallee           Call[]                 @relation("CallCallee")
   voipDeviceTokens        VoipDeviceToken[]
 
+  @@index([createdAt, id])
+  @@index([gender, birthday, createdAt, id])
   @@map("users")
 }
 
@@ -89,6 +93,7 @@ model Profile {
   hiddenFields             String[]          @default([]) @map("hidden_fields")
   user                     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([height, userId])
   @@map("profiles")
 }
 
@@ -144,6 +149,7 @@ model Swipe {
   target    User        @relation("TargetSwipes", fields: [targetId], references: [id], onDelete: Cascade)
 
   @@unique([swiperId, targetId])
+  @@index([swiperId])
   @@index([targetId])
   @@index([targetId, action, createdAt])
   @@map("swipes")
@@ -214,6 +220,7 @@ model Block {
   blocker   User     @relation("BlockerBlocks", fields: [blockerId], references: [id], onDelete: Cascade)
 
   @@unique([blockerId, blockedId])
+  @@index([blockerId])
   @@index([blockedId, blockerId])
   @@map("blocks")
 }
@@ -237,9 +244,10 @@ model PrivacySettings {
   userId           String  @unique @map("user_id")
   discoverable     Boolean @default(true)
   showDistance     Boolean @default(false) @map("show_distance")
-  showOnlineStatus Boolean @default(false) @map("show_online_status")
+  showOnlineStatus Boolean @default(true) @map("show_online_status")
   user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([discoverable, userId])
   @@map("privacy_settings")
 }
 

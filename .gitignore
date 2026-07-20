@@ -9,6 +9,9 @@ ios/
 # Prisma generated
 apps/backend/src/generated/
 
+# Local embedded Postgres cluster used as Prisma's shadow database
+apps/backend/shadow-db/data/
+
 # Logs
 logs
 *.log

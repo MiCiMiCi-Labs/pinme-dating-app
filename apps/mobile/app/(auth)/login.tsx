@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { syncAuthUser } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { colors, LogoMark, PrimaryButton, SocialIconButton, TextButton } from '@/design/system';
@@ -34,18 +35,6 @@ function getLoginErrorMessage(error: unknown) {
   }
 
   return 'Failed to log in';
-}
-
-function getOAuthParams(url: string) {
-  const [, hash = ''] = url.split('#');
-  const [, query = ''] = url.split('?');
-  const params = new URLSearchParams(hash || query);
-
-  return {
-    accessToken: params.get('access_token'),
-    refreshToken: params.get('refresh_token'),
-    error: params.get('error_description') ?? params.get('error'),
-  };
 }
 
 export default function LoginScreen() {
@@ -75,42 +64,6 @@ export default function LoginScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    async function handleOAuthCallback(url: string) {
-      const { accessToken, refreshToken, error: oauthError } = getOAuthParams(url);
-
-      if (oauthError) {
-        setError(oauthError);
-        return;
-      }
-
-      if (!accessToken || !refreshToken) return;
-
-      const { error: sessionError } = await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-
-      if (sessionError) {
-        setError(getLoginErrorMessage(sessionError));
-      }
-    }
-
-    Linking.getInitialURL().then((url) => {
-      if (url) {
-        handleOAuthCallback(url);
-      }
-    });
-
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      handleOAuthCallback(url);
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, []);
-
   const login = async () => {
     setError(null);
     setSubmitting(true);
@@ -126,10 +79,16 @@ export default function LoginScreen() {
         throw new Error('Login succeeded but no session was returned.');
       }
 
-      await syncAuthUser(data.session.access_token);
+      syncAuthUser(data.session.access_token).catch((syncError) => {
+        console.warn('[auth] Failed to sync user after login:', syncError);
+      });
+      // No setSubmitting(false) here on success: AuthProvider's session/
+      // profile-completion state is about to swap this screen out for
+      // LoadingScreen -> Discover. Resetting it here would briefly re-enable
+      // the full login form (spinner -> form flash) in the gap before that
+      // swap happens.
     } catch (err) {
       setError(getLoginErrorMessage(err));
-    } finally {
       setSubmitting(false);
     }
   };
@@ -180,9 +139,10 @@ export default function LoginScreen() {
       });
 
       if (verifyError) throw verifyError;
+      // Same reasoning as login() above — a successful verify triggers the
+      // same session-driven screen swap, so don't re-enable the form first.
     } catch (err) {
       setError(getLoginErrorMessage(err));
-    } finally {
       setSubmitting(false);
     }
   };
@@ -219,6 +179,7 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
+      <StatusBar style="light" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboard}
@@ -271,15 +232,19 @@ export default function LoginScreen() {
               </>
             ) : (
               <>
-                <Pressable style={styles.emailPrimaryButton} onPress={() => setShowEmailForm(true)}>
-                  <Text style={styles.emailPrimaryText}>Continue with email</Text>
-                </Pressable>
+                {__DEV__ ? (
+                  <>
+                    <Pressable style={styles.emailPrimaryButton} onPress={() => setShowEmailForm(true)}>
+                      <Text style={styles.emailPrimaryText}>Continue with email</Text>
+                    </Pressable>
 
-                <View style={styles.dividerRow}>
-                  <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>or</Text>
-                  <View style={styles.dividerLine} />
-                </View>
+                    <View style={styles.dividerRow}>
+                      <View style={styles.dividerLine} />
+                      <Text style={styles.dividerText}>or</Text>
+                      <View style={styles.dividerLine} />
+                    </View>
+                  </>
+                ) : null}
 
                 <View style={styles.phoneField}>
                   <Ionicons name="phone-portrait-outline" size={20} color={colors.grayIcon} />
@@ -356,12 +321,12 @@ export default function LoginScreen() {
           <View style={styles.footer}>
             {showEmailForm ? (
               <>
-                <PrimaryButton onPress={submitting ? undefined : login}>
-                  {submitting ? <ActivityIndicator color="#FFFFFF" /> : 'Log in'}
+                <PrimaryButton variant="outline" onPress={submitting ? undefined : login}>
+                  {submitting ? <ActivityIndicator color={colors.primary} /> : 'Log in'}
                 </PrimaryButton>
                 <View style={styles.registerRow}>
                   <Text style={styles.registerText}>New here? </Text>
-                  <TextButton onPress={() => router.push('/(auth)/register')}>
+                  <TextButton color="#FFFFFF" onPress={() => router.push('/(auth)/register')}>
                     Create an account
                   </TextButton>
                 </View>
@@ -377,7 +342,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: colors.bg,
+    backgroundColor: colors.primary,
   },
   keyboard: {
     flex: 1,
@@ -399,19 +364,18 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
   },
   title: {
-    color: colors.text,
+    color: '#FFFFFF',
     fontSize: 32,
     fontWeight: '900',
   },
   copy: {
-    color: colors.muted,
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 14,
     lineHeight: 22,
     marginTop: 8,
@@ -420,8 +384,7 @@ const styles = StyleSheet.create({
   field: {
     height: 60,
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
@@ -431,8 +394,7 @@ const styles = StyleSheet.create({
   phoneField: {
     height: 58,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.line,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 18,
@@ -442,11 +404,9 @@ const styles = StyleSheet.create({
   phoneSubmitButton: {
     height: 50,
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.soft,
+    backgroundColor: '#FFFFFF',
     marginBottom: 6,
   },
   phoneSubmitText: {
@@ -463,8 +423,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   error: {
-    color: colors.primary,
+    color: '#FFFFFF',
     fontSize: 13,
+    fontWeight: '800',
     lineHeight: 19,
     marginTop: 4,
   },
@@ -477,10 +438,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.primary,
+    backgroundColor: '#FFFFFF',
   },
   emailPrimaryText: {
-    color: '#FFFFFF',
+    color: colors.primary,
     fontSize: 15,
     fontWeight: '900',
   },
@@ -493,10 +454,10 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: colors.line,
+    backgroundColor: 'rgba(255,255,255,0.4)',
   },
   dividerText: {
-    color: colors.muted,
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 13,
     fontWeight: '700',
   },
@@ -516,14 +477,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   termsText: {
-    color: colors.muted,
+    color: 'rgba(255,255,255,0.75)',
     fontSize: 12,
     lineHeight: 18,
     textAlign: 'center',
     marginTop: 14,
   },
   termsLink: {
-    color: colors.primary,
+    color: '#FFFFFF',
     fontWeight: '800',
   },
   registerRow: {
@@ -531,7 +492,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   registerText: {
-    color: colors.muted,
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 14,
   },
 });

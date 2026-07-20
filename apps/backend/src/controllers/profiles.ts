@@ -1,18 +1,29 @@
 import { Gender, RelationshipGoal } from '@prisma/client';
 import { Request, Response } from 'express';
 import { z } from 'zod';
+import { calculateAge } from '../lib/age';
 import { prisma } from '../lib/prisma';
+
+const MINIMUM_AGE = 18;
 
 const nullableString = (max: number) =>
   z.string().trim().max(max).nullable().optional();
 
 const optionalStringArray = z.array(z.string().trim().min(1).max(80)).max(20).optional();
 
+// The 18+ requirement is enforced client-side in the onboarding wizard, but
+// this endpoint is also reachable directly (e.g. editing your profile later),
+// so the minimum has to be checked here too — otherwise a raw request can
+// create/edit an under-18 account and it lands straight in the discovery
+// pool.
 const birthdayString = z
   .string()
   .trim()
   .refine((value) => !Number.isNaN(new Date(value).getTime()), {
     message: 'birthday must be a valid date',
+  })
+  .refine((value) => calculateAge(new Date(value)) >= MINIMUM_AGE, {
+    message: `you must be at least ${MINIMUM_AGE} to use PinMe`,
   });
 
 const profileSchema = z

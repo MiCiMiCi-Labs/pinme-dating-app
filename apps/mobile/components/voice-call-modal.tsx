@@ -7,6 +7,7 @@ import {
   useLocalParticipant,
   useRemoteParticipants,
 } from '@livekit/react-native';
+import { Event as WebRTCEvent } from '@livekit/react-native-webrtc';
 import { Audio } from 'expo-av';
 import { Image } from 'expo-image';
 import { MediaDeviceFailure } from 'livekit-client';
@@ -17,6 +18,31 @@ import { colors } from '@/design/system';
 import { showToast } from '@/stores/toast.store';
 import type { CallPhase } from '@/contexts/call';
 import type { CallFailureReason, CallSummary, LiveKitCredentials } from '@/lib/api';
+
+// Global `Event` — confirmed missing on-device (real iPhone build): Hermes
+// has no DOM `Event` global, but livekit-client's bundled webrtc-adapter shim
+// (node_modules/livekit-client/dist/livekit-client.esm.mjs) unconditionally
+// does `new Event('connectionstatechange', ...)` / `new Event('track')` /
+// `new Event('addstream')` / `new Event('negotiationneeded')` when
+// normalizing RTCPeerConnection events, assuming a browser DOM environment.
+// Neither @livekit/react-native's nor @livekit/react-native-webrtc's own
+// registerGlobals() define this. Without it, every RTCPeerConnection
+// connectionstatechange — including the one fired on disconnect — throws an
+// uncaught `ReferenceError: Property 'Event' doesn't exist`.
+//
+// Reuses @livekit/react-native-webrtc's own exported `Event` (the same
+// implementation its internal EventTarget/RTCPeerConnection/RTCDataChannel
+// already use) instead of a hand-rolled polyfill, so instanceof/
+// preventDefault/propagation semantics stay identical to what the rest of
+// the WebRTC stack expects. Guarded (never overwrites an existing global) so
+// it's a no-op if a future RN/Hermes version adds a real one.
+if (typeof globalThis.Event === 'undefined') {
+  Object.defineProperty(globalThis, 'Event', {
+    value: WebRTCEvent as unknown as typeof Event,
+    configurable: true,
+    writable: true,
+  });
+}
 
 registerGlobals();
 
@@ -56,6 +82,11 @@ type Props = {
   phase: CallPhase;
   partnerName: string;
   partnerAvatar: string;
+  // Whether it's safe for ConnectedCallScreen to let LiveKitRoom actually
+  // connect right now — see contexts/call.tsx's isPrivateCallAudioAuthorized
+  // and lib/callAudioCoordinator.ts for the full rationale. Always true for
+  // a call CallKit never displayed (Phase 2 foreground behavior, unchanged).
+  audioAuthorized: boolean;
   onCancel: () => void;
   onEnd: () => void;
   onMediaConnected: () => void;
@@ -71,6 +102,7 @@ export function VoiceCallModal({
   phase,
   partnerName,
   partnerAvatar,
+  audioAuthorized,
   onCancel,
   onEnd,
   onMediaConnected,
@@ -86,6 +118,7 @@ export function VoiceCallModal({
           call={call}
           partnerName={partnerName}
           partnerAvatar={partnerAvatar}
+          audioAuthorized={audioAuthorized}
           onEnd={onEnd}
           onMediaConnected={onMediaConnected}
           onMediaDisconnected={onMediaDisconnected}
@@ -120,6 +153,7 @@ function MicPreflightGate({
   call,
   partnerName,
   partnerAvatar,
+  audioAuthorized,
   onEnd,
   onMediaConnected,
   onMediaDisconnected,
@@ -130,6 +164,7 @@ function MicPreflightGate({
   call: CallSummary;
   partnerName: string;
   partnerAvatar: string;
+  audioAuthorized: boolean;
   onEnd: () => void;
   onMediaConnected: () => void;
   onMediaDisconnected: () => void;
@@ -207,6 +242,7 @@ function MicPreflightGate({
       call={call}
       partnerName={partnerName}
       partnerAvatar={partnerAvatar}
+      audioAuthorized={audioAuthorized}
       onEnd={onEnd}
       onMediaConnected={onMediaConnected}
       onMediaDisconnected={onMediaDisconnected}
@@ -225,6 +261,7 @@ function LiveKitConnectionSection({
   call,
   partnerName,
   partnerAvatar,
+  audioAuthorized,
   onEnd,
   onMediaConnected,
   onMediaDisconnected,
@@ -235,6 +272,7 @@ function LiveKitConnectionSection({
   call: CallSummary;
   partnerName: string;
   partnerAvatar: string;
+  audioAuthorized: boolean;
   onEnd: () => void;
   onMediaConnected: () => void;
   onMediaDisconnected: () => void;
@@ -243,11 +281,30 @@ function LiveKitConnectionSection({
 }) {
   const hasConnectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest audioAuthorized, read inside handleDisconnected below (a
+  // useCallback with an empty/stable dep array) so it never closes over a
+  // stale value.
+  const audioAuthorizedRef = useRef(audioAuthorized);
+  audioAuthorizedRef.current = audioAuthorized;
 
   useEffect(() => {
+    // Not authorized yet (a CallKit-managed call still waiting on
+    // didActivateAudioSession) — LiveKitRoom's `connect` is deliberately
+    // still false, so there is no connection attempt to watch yet; starting
+    // the watchdog here would fire it after CONNECTION_TIMEOUT_MS regardless
+    // of whether CallKit ever authorizes. A plain (non-CallKit) call has
+    // audioAuthorized true from its very first render, so this behaves
+    // exactly as before for it.
+    if (!audioAuthorized) return;
+    if (hasConnectedRef.current) return; // already connected — nothing to watch
+
     timeoutRef.current = setTimeout(() => {
       timeoutRef.current = null;
-      if (!hasConnectedRef.current) onConfirmOrFail();
+      // Re-check both at fire time, not just at schedule time: audioAuthorized
+      // may have been revoked (CallKit deactivated) after this timer was set,
+      // in which case the disconnect it caused is not a real failure — see
+      // handleDisconnected's identical guard.
+      if (!hasConnectedRef.current && audioAuthorizedRef.current) onConfirmOrFail();
     }, CONNECTION_TIMEOUT_MS);
 
     return () => {
@@ -256,7 +313,7 @@ function LiveKitConnectionSection({
         timeoutRef.current = null;
       }
     };
-  }, [onConfirmOrFail]);
+  }, [audioAuthorized, onConfirmOrFail]);
 
   const handleConnected = useCallback(() => {
     hasConnectedRef.current = true;
@@ -276,6 +333,14 @@ function LiveKitConnectionSection({
   }, [onConfirmOrFail]);
 
   const handleDisconnected = useCallback(() => {
+    // A disconnect while NOT authorized is one this component itself just
+    // caused, by design, via the `connect={audioAuthorized}` gate below
+    // (either never-yet-authorized, or CallKit deactivated audio for this
+    // call — see lib/callAudioCoordinator.ts) — never treat that as a real
+    // connection failure; confirmCallOrFail would otherwise escalate a
+    // still-ACCEPTED call to LIVEKIT_CONNECTION_FAILED for a call that may
+    // simply be waiting to reconnect once CallKit reactivates audio.
+    if (!audioAuthorizedRef.current) return;
     onConfirmOrFail();
   }, [onConfirmOrFail]);
 
@@ -306,7 +371,7 @@ function LiveKitConnectionSection({
     <LiveKitRoom
       serverUrl={livekit.url}
       token={livekit.token}
-      connect
+      connect={audioAuthorized}
       audio
       video={false}
       onConnected={handleConnected}
@@ -318,6 +383,7 @@ function LiveKitConnectionSection({
         call={call}
         partnerName={partnerName}
         partnerAvatar={partnerAvatar}
+        audioAuthorized={audioAuthorized}
         onEnd={onEnd}
         onMediaConnected={onMediaConnected}
         onMediaDisconnected={onMediaDisconnected}
@@ -394,6 +460,7 @@ function ConnectedCallScreen({
   call,
   partnerName,
   partnerAvatar,
+  audioAuthorized,
   onEnd,
   onMediaConnected,
   onMediaDisconnected,
@@ -402,6 +469,7 @@ function ConnectedCallScreen({
   call: CallSummary;
   partnerName: string;
   partnerAvatar: string;
+  audioAuthorized: boolean;
   onEnd: () => void;
   onMediaConnected: () => void;
   onMediaDisconnected: () => void;
@@ -415,7 +483,13 @@ function ConnectedCallScreen({
   // 'signalReconnecting' is a sub-state of reconnection (see livekit-client's
   // ConnectionState enum) — treated the same as 'reconnecting' here.
   const isReconnecting = connectionState === 'reconnecting' || connectionState === 'signalReconnecting';
-  const isConnecting = connectionState === 'connecting';
+  // While not yet authorized (a CallKit-managed call still waiting on
+  // didActivateAudioSession — see contexts/call.tsx's
+  // isPrivateCallAudioAuthorized), LiveKitRoom's `connect` prop is
+  // deliberately still false, so connectionState never reaches 'connecting'
+  // on its own; treated the same as 'connecting' here rather than showing a
+  // stale "00:00" elapsed label for a call that hasn't started audio yet.
+  const isConnecting = connectionState === 'connecting' || !audioAuthorized;
 
   const [elapsed, setElapsed] = useState(0);
   const [banner, setBanner] = useState<string | null>(null);
@@ -440,6 +514,19 @@ function ConnectedCallScreen({
   }, [hasPartner]);
 
   useEffect(() => {
+    if (!audioAuthorized) {
+      // hasPartner reading false here (or about to) is a side effect of
+      // OUR OWN gated disconnect (see the LiveKitRoom `connect` prop above),
+      // not the partner actually leaving — never show a "left the call"
+      // banner or schedule a confirmCallOrFail for it, and never let an
+      // already-scheduled one from before authorization was revoked fire.
+      if (partnerLeftTimerRef.current) {
+        clearTimeout(partnerLeftTimerRef.current);
+        partnerLeftTimerRef.current = null;
+      }
+      prevHasPartner.current = hasPartner;
+      return;
+    }
     if (hasPartner && !prevHasPartner.current) {
       showBanner(`${partnerName} joined the call`);
       if (partnerLeftTimerRef.current) {
@@ -462,7 +549,7 @@ function ConnectedCallScreen({
     }
     prevHasPartner.current = hasPartner;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasPartner]);
+  }, [hasPartner, audioAuthorized]);
 
   // "Partner never joined" grace: distinct from the "joined then left" timer
   // above. Only starts once *we* are locally connected (never before — a
@@ -472,6 +559,12 @@ function ConnectedCallScreen({
   // a brief participant-list update happens to flip hasPartner momentarily,
   // clearing/restarting the grace rather than failing on that alone.
   useEffect(() => {
+    // See the hasPartner effect above — a gate-caused disconnect must never
+    // be treated as "partner never joined" either. connectionState !==
+    // 'connected' already covers most of this (a gated/disconnected room
+    // isn't 'connected'), but this is checked explicitly too rather than
+    // relied upon implicitly.
+    if (!audioAuthorized) return;
     if (connectionState !== 'connected') return;
     if (hasPartner) return;
     if (hasEverHadPartnerRef.current) return; // "left after joining" — the other timer covers this
@@ -487,7 +580,7 @@ function ConnectedCallScreen({
         partnerNeverJoinedTimerRef.current = null;
       }
     };
-  }, [connectionState, hasPartner, onConfirmOrFail]);
+  }, [connectionState, hasPartner, onConfirmOrFail, audioAuthorized]);
 
   useEffect(() => {
     return () => {
@@ -508,13 +601,6 @@ function ConnectedCallScreen({
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [call.answeredAt]);
-
-  useEffect(() => {
-    AudioSession.startAudioSession();
-    return () => {
-      AudioSession.stopAudioSession();
-    };
-  }, []);
 
   const showBanner = (message: string) => {
     setBanner(message);

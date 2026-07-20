@@ -4,6 +4,7 @@ import { hasBlockBetween } from '../lib/safety';
 import { notifyMatchCreated } from '../lib/notifications';
 
 const VALID_ACTIONS = ['LIKE', 'DISLIKE', 'SUPER_LIKE'] as const;
+const ACTIVE_MATCH_LIMIT = 10;
 
 async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
   const user = await prisma.user.findUnique({
@@ -11,6 +12,33 @@ async function resolveDbUserId(supabaseAuthId: string): Promise<string | null> {
     select: { id: true },
   });
   return user?.id ?? null;
+}
+
+async function countActiveMatches(userId: string) {
+  return prisma.match.count({
+    where: {
+      unmatchedAt: null,
+      OR: [{ user1Id: userId }, { user2Id: userId }],
+    },
+  });
+}
+
+function sendMatchLimitReached(res: Response) {
+  res.status(409).json({
+    code: 'MATCH_LIMIT_REACHED',
+    error: 'MATCH_LIMIT_REACHED',
+    message: `You have reached ${ACTIVE_MATCH_LIMIT} active matches. Unmatch someone to keep discovering.`,
+    limit: ACTIVE_MATCH_LIMIT,
+  });
+}
+
+function sendTargetMatchLimitReached(res: Response) {
+  res.status(409).json({
+    code: 'TARGET_MATCH_LIMIT_REACHED',
+    error: 'TARGET_MATCH_LIMIT_REACHED',
+    message: 'This person is not available to match right now.',
+    limit: ACTIVE_MATCH_LIMIT,
+  });
 }
 
 export async function createSwipe(req: Request, res: Response) {
@@ -40,9 +68,18 @@ export async function createSwipe(req: Request, res: Response) {
 
     const targetExists = await prisma.user.findUnique({
       where: { id: targetId },
-      select: { id: true },
+      select: { id: true, privacySettings: { select: { discoverable: true } } },
     });
     if (!targetExists) {
+      res.status(404).json({ error: 'Target user not found' });
+      return;
+    }
+
+    // A client holding a stale/cached profile id (from before the target
+    // turned discoverability off) could otherwise still like/match them
+    // directly, bypassing the discovery feed's own filter entirely. Mirrors
+    // discovery.ts's fail-closed treatment of a missing privacySettings row.
+    if (targetExists.privacySettings?.discoverable !== true) {
       res.status(404).json({ error: 'Target user not found' });
       return;
     }
@@ -74,17 +111,41 @@ export async function createSwipe(req: Request, res: Response) {
       return;
     }
 
+    const isPositiveSwipe = action === 'LIKE' || action === 'SUPER_LIKE';
+
+    if (isPositiveSwipe) {
+      const activeMatchCount = await countActiveMatches(swiperId);
+      if (activeMatchCount >= ACTIVE_MATCH_LIMIT) {
+        sendMatchLimitReached(res);
+        return;
+      }
+    }
+
+    const reverseSwipe = isPositiveSwipe
+      ? await prisma.swipe.findUnique({
+          where: { swiperId_targetId: { swiperId: targetId, targetId: swiperId } },
+        })
+      : null;
+
+    if (
+      reverseSwipe &&
+      isPositiveSwipe &&
+      (reverseSwipe.action === 'LIKE' || reverseSwipe.action === 'SUPER_LIKE')
+    ) {
+      const targetActiveMatchCount = await countActiveMatches(targetId);
+      if (targetActiveMatchCount >= ACTIVE_MATCH_LIMIT) {
+        sendTargetMatchLimitReached(res);
+        return;
+      }
+    }
+
     const swipe = await prisma.swipe.create({
       data: { swiperId, targetId, action },
     });
 
     let match = null;
     let message = null;
-    if (action === 'LIKE' || action === 'SUPER_LIKE') {
-      const reverseSwipe = await prisma.swipe.findUnique({
-        where: { swiperId_targetId: { swiperId: targetId, targetId: swiperId } },
-      });
-
+    if (isPositiveSwipe) {
       console.log('[createSwipe] swiperId:', swiperId, 'targetId:', targetId, 'reverseSwipe:', reverseSwipe);
 
       if (reverseSwipe && (reverseSwipe.action === 'LIKE' || reverseSwipe.action === 'SUPER_LIKE')) {

@@ -32,6 +32,7 @@ function getOwnerPhoto(room: VoiceRoom) {
 export default function VoiceRoomsScreen() {
 const [rooms, setRooms] = useState<VoiceRoom[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const tagsRef = useRef<string[]>([]);
   const [query, setQuery] = useState('');
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [roomName, setRoomName] = useState('');
@@ -80,7 +81,7 @@ const [rooms, setRooms] = useState<VoiceRoom[]>([]);
           cursor,
           limit: 20,
         }),
-        tags.length ? Promise.resolve({ tags }) : getVoiceRoomTags(session.access_token),
+        tagsRef.current.length ? Promise.resolve({ tags: tagsRef.current }) : getVoiceRoomTags(session.access_token),
       ]);
       setRooms(current => {
         if (!append) return roomsResponse.rooms;
@@ -91,6 +92,7 @@ const [rooms, setRooms] = useState<VoiceRoom[]>([]);
       });
       setNextCursor(roomsResponse.nextCursor);
       setHasMore(roomsResponse.hasMore);
+      tagsRef.current = tagsResponse.tags;
       setTags(tagsResponse.tags);
       hasLoadedRef.current = true;
     } catch (err) {
@@ -101,7 +103,7 @@ const [rooms, setRooms] = useState<VoiceRoom[]>([]);
       setRefreshing(false);
       setLoadingMore(false);
     }
-  }, [activeTag, query, tags]);
+  }, [activeTag, query]);
 
   useFocusEffect(
     useCallback(() => {

@@ -1,12 +1,15 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { AppState } from 'react-native';
 import { type Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import {
   ApiError,
   getMyProfile,
+  sendHeartbeat,
   type AppProfile,
   type AppUser,
 } from '@/lib/api';
+import { getProfileCompletion, setProfileCompletion as setCachedProfileCompletion } from '@/lib/profileCompletion';
 import { registerForPushNotifications } from '@/lib/pushNotifications';
 
 type AuthContextType = {
@@ -74,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function loadProfileCompletion() {
-      if (!session?.access_token) {
+      if (!session?.access_token || !session.user.id) {
         setProfileComplete(false);
         setProfileCompletionLoading(false);
         return;
@@ -82,19 +85,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setProfileCompletionLoading(true);
 
+      const cachedComplete = await getProfileCompletion(session.user.id).catch(() => false);
+
+      if (cancelled) return;
+
+      if (cachedComplete) {
+        setProfileComplete(true);
+        setProfileCompletionLoading(false);
+      }
+
       let complete = false;
 
       try {
         const { user, profile } = await getMyProfile(session.access_token);
         complete = hasCompleteProfile(user, profile);
+        await setCachedProfileCompletion(session.user.id, complete);
       } catch (err) {
         // A 401 here means the access token itself is invalid/expired, not that
         // the profile is incomplete — sign out so the user is routed back to
         // login instead of being shown the complete-profile onboarding flow.
         if (err instanceof ApiError && err.status === 401) {
+          await setCachedProfileCompletion(session.user.id, false).catch(() => {});
           await supabase.auth.signOut();
         }
-        complete = false;
+        complete = cachedComplete;
       }
 
       if (!cancelled) {
@@ -118,8 +132,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [profileComplete, session?.access_token]);
 
+  // Drives the "online" indicator matches see on the Messages screen's
+  // Activities row (ChatMatch['user'].isOnline — see getChats' 2-minute
+  // freshness window in apps/backend/src/controllers/chats.ts). Pings while
+  // foregrounded only; the interval is well under that 2-minute window so a
+  // couple of missed/delayed pings still don't flip someone to "offline".
+  useEffect(() => {
+    const token = session?.access_token;
+    if (!token) return;
+
+    let cancelled = false;
+    const ping = () => {
+      if (cancelled || AppState.currentState !== 'active') return;
+      sendHeartbeat(token).catch(() => {});
+    };
+
+    ping();
+    const interval = setInterval(ping, 45_000);
+    const sub = AppState.addEventListener('change', next => {
+      if (next === 'active') ping();
+    });
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [session?.access_token]);
+
   const refreshProfileCompletion = async () => {
-    if (!session?.access_token) {
+    if (!session?.access_token || !session.user.id) {
       setProfileComplete(false);
       return false;
     }
@@ -127,10 +169,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { user, profile } = await getMyProfile(session.access_token);
       const complete = hasCompleteProfile(user, profile);
+      await setCachedProfileCompletion(session.user.id, complete);
       setProfileComplete(complete);
       return complete;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
+        await setCachedProfileCompletion(session.user.id, false).catch(() => {});
         await supabase.auth.signOut();
       }
       setProfileComplete(false);

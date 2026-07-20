@@ -26,6 +26,15 @@ type DbSubscription = {
   expiresAt: Date | null;
 };
 
+type SubscriptionRow = {
+  userId: string;
+  status: 'ACTIVE' | 'EXPIRED' | 'CANCELED' | null;
+  plan: string | null;
+  source: string | null;
+  promoCode: string | null;
+  expiresAt: Date | null;
+};
+
 function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
@@ -65,25 +74,36 @@ function serializeSubscription(
 
 export async function getMySubscription(req: Request, res: Response) {
   try {
-    const dbUserId = await resolveDbUserId(req.userId!);
-    if (!dbUserId) {
+    const [row] = await prisma.$queryRaw<SubscriptionRow[]>(Prisma.sql`
+      SELECT
+        u.id AS "userId",
+        s.status,
+        s.plan,
+        s.source,
+        s.promo_code AS "promoCode",
+        s.expires_at AS "expiresAt"
+      FROM users u
+      LEFT JOIN subscriptions s ON s.user_id = u.id
+      WHERE u."supabaseAuthId" = ${req.userId!}
+      LIMIT 1
+    `);
+
+    if (!row) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const [subscription] = await prisma.$queryRaw<DbSubscription[]>(Prisma.sql`
-      SELECT
-        status,
-        plan,
-        source,
-        promo_code AS "promoCode",
-        expires_at AS "expiresAt"
-      FROM subscriptions
-      WHERE user_id = ${dbUserId}
-      LIMIT 1
-    `);
-
-    res.json({ subscription: serializeSubscription(subscription ?? null) });
+    res.json({
+      subscription: serializeSubscription(row.status && row.plan && row.source
+        ? {
+            status: row.status,
+            plan: row.plan,
+            source: row.source,
+            promoCode: row.promoCode,
+            expiresAt: row.expiresAt,
+          }
+        : null),
+    });
   } catch (error) {
     console.error('[getMySubscription] error:', error);
     res.status(500).json({ error: 'Internal server error' });

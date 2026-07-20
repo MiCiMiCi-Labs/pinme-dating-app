@@ -170,6 +170,54 @@ function serializeRoom(room: any, blockedUserIds: Set<string> = new Set()) {
   };
 }
 
+type VoiceRoomListRow = {
+  id: string;
+  owner_id: string;
+  name: string;
+  tags: string[];
+  livekit_room_name: string;
+  is_open: boolean;
+  created_at: Date;
+  closed_at: Date | null;
+  owner_name: string;
+  owner_photo_id: string | null;
+  owner_photo_url: string | null;
+  owner_photo_thumbnail_url: string | null;
+  owner_photo_is_primary: boolean | null;
+  owner_photo_is_verified: boolean | null;
+  owner_photo_order_index: number | null;
+  participant_count: number;
+};
+
+function serializeRoomListRow(row: VoiceRoomListRow) {
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    name: row.name,
+    tags: row.tags,
+    livekitRoomName: row.livekit_room_name,
+    isOpen: row.is_open,
+    createdAt: row.created_at,
+    closedAt: row.closed_at,
+    owner: {
+      id: row.owner_id,
+      name: row.owner_name,
+      photos: row.owner_photo_id
+        ? [{
+            id: row.owner_photo_id,
+            url: row.owner_photo_url,
+            thumbnailUrl: row.owner_photo_thumbnail_url,
+            isPrimary: row.owner_photo_is_primary ?? false,
+            isVerified: row.owner_photo_is_verified ?? false,
+            orderIndex: row.owner_photo_order_index ?? 0,
+          }]
+        : [],
+    },
+    participantCount: row.participant_count,
+    participants: [],
+  };
+}
+
 async function createVoiceRoomToken(room: { livekitRoomName: string }, user: { id: string; name: string }, canPublish: boolean) {
   const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
     identity: user.id,
@@ -209,33 +257,65 @@ export async function listVoiceRooms(req: Request, res: Response) {
     // participant list below — avoids an hasBlockBetween call per row.
     const blockedUserIds = await getBlockedUserIds(currentUser.id);
 
-    const rooms = await prisma.voiceRoom.findMany({
-      where: {
-        isOpen: true,
-        ...(blockedUserIds.size > 0 ? { ownerId: { notIn: Array.from(blockedUserIds) } } : {}),
-        ...(cursor ? { createdAt: { lt: cursor } } : {}),
-        ...(tags.length ? { tags: { hasSome: tags } } : {}),
-        ...(search
-          ? {
-              OR: [
-                { id: { contains: search, mode: 'insensitive' } },
-                { name: { contains: search, mode: 'insensitive' } },
-              ],
-            }
-          : {}),
-      },
-      include: roomInclude,
-      orderBy: { createdAt: 'desc' },
-      take: limit + 1,
-    });
+    const blockedIds = Array.from(blockedUserIds);
+    const tagFilter = tags.length ? tags : null;
+    const searchFilter = search || null;
+    const rooms = await prisma.$queryRaw<VoiceRoomListRow[]>`
+      SELECT
+        vr.id,
+        vr.owner_id,
+        vr.name,
+        vr.tags,
+        vr.livekit_room_name,
+        vr.is_open,
+        vr.created_at,
+        vr.closed_at,
+        owner.name AS owner_name,
+        owner_photo.id AS owner_photo_id,
+        owner_photo.url AS owner_photo_url,
+        owner_photo.thumbnail_url AS owner_photo_thumbnail_url,
+        owner_photo.is_primary AS owner_photo_is_primary,
+        owner_photo.is_verified AS owner_photo_is_verified,
+        owner_photo.order_index AS owner_photo_order_index,
+        COALESCE(participants.participant_count, 0)::int AS participant_count
+      FROM voice_rooms vr
+      JOIN users owner ON owner.id = vr.owner_id
+      LEFT JOIN LATERAL (
+        SELECT
+          p.id,
+          p.url,
+          p.thumbnail_url,
+          p.is_primary,
+          p.is_verified,
+          p.order_index
+        FROM photos p
+        WHERE p.user_id = owner.id
+        ORDER BY p.is_primary DESC, p.order_index ASC, p.created_at ASC
+        LIMIT 1
+      ) owner_photo ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS participant_count
+        FROM voice_room_participants vrp
+        WHERE vrp.room_id = vr.id
+          AND vrp.left_at IS NULL
+          AND NOT (vrp.user_id = ANY(${blockedIds}::text[]))
+      ) participants ON true
+      WHERE vr.is_open = true
+        AND NOT (vr.owner_id = ANY(${blockedIds}::text[]))
+        AND (${cursor}::timestamp IS NULL OR vr.created_at < ${cursor})
+        AND (${tagFilter}::text[] IS NULL OR vr.tags && ${tagFilter}::text[])
+        AND (${searchFilter}::text IS NULL OR vr.id ILIKE '%' || ${searchFilter} || '%' OR vr.name ILIKE '%' || ${searchFilter} || '%')
+      ORDER BY vr.created_at DESC
+      LIMIT ${limit + 1};
+    `;
 
     const hasMore = rooms.length > limit;
     const pageRooms = rooms.slice(0, limit);
     const lastRoom = pageRooms[pageRooms.length - 1];
 
     res.json({
-      rooms: pageRooms.map(room => serializeRoom(room, blockedUserIds)),
-      nextCursor: hasMore && lastRoom ? lastRoom.createdAt.toISOString() : null,
+      rooms: pageRooms.map(serializeRoomListRow),
+      nextCursor: hasMore && lastRoom ? lastRoom.created_at.toISOString() : null,
       hasMore,
     });
   } catch (err) {

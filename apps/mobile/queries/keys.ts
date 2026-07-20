@@ -10,4 +10,5 @@ export const queryKeys = {
   likesList: (userId: string) => ['likes', userId, 'list'] as const,
   subscription: (userId: string) => ['subscription', userId, 'me'] as const,
   callPreference: (userId: string, matchId: string) => ['calls', userId, 'preference', matchId] as const,
+  privacySettings: (userId: string) => ['privacy', userId, 'me'] as const,
 };

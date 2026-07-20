@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,7 +112,7 @@ export function DiscoverCard({
       </View>
       <LinearGradient colors={['transparent', 'rgba(0,0,0,0.82)']} style={styles.cardGradient}>
         <Text style={styles.cardName}>{user.name}, {user.age}</Text>
-        <Text style={styles.cardRole}>{user.profile?.jobTitle ?? user.city ?? ''}</Text>
+        <Text style={styles.cardRole}>{user.jobTitle ?? user.city ?? ''}</Text>
       </LinearGradient>
       <Animated.View style={[styles.feedbackLike, { opacity: likeOpacity }]}>
         <Ionicons name="heart" size={42} color={colors.primary} />
@@ -137,23 +137,40 @@ export function SwipeActions({ onNope, onLike }: { onNope: () => void; onLike: (
 const GENDER_OPTIONS: Array<{ label: string; value: Preferences['preferredGender'] }> = [
   { label: 'Girls', value: 'FEMALE' },
   { label: 'Boys', value: 'MALE' },
-  { label: 'Both', value: null },
+  { label: 'Non-binary', value: 'NON_BINARY' },
+  // Matches every gender in the database, not just girls/boys — the label
+  // should say so.
+  { label: 'Everyone', value: null },
 ];
 
-const DISTANCE_OPTIONS = [10, 25, 50, 100, 200];
+// null represents "no limit" (matches the nullable columns in the database)
+// rather than being mapped to some arbitrary finite default — that mapping
+// was exactly the bug where Reset/an unloaded sheet could silently overwrite
+// an unlimited distance/height with a concrete one.
+const DISTANCE_OPTIONS: Array<number | null> = [10, 25, 50, 100, 200, null];
 const MIN_AGE_OPTIONS = [18, 20, 22, 25, 28, 30];
 const MAX_AGE_OPTIONS = [22, 25, 28, 30, 35, 40, 99];
+const MIN_HEIGHT_OPTIONS: Array<number | null> = [null, 150, 160, 170, 180, 190];
+const MAX_HEIGHT_OPTIONS: Array<number | null> = [160, 170, 180, 190, 200, null];
+
+function rangeValueLabel(value: number | null, unit: string) {
+  return value === null ? 'Any' : `${value}${unit}`;
+}
 
 export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply?: () => void }) {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationLabel, setLocationLabel] = useState<string | null>(null);
 
   const [preferredGender, setPreferredGender] = useState<Preferences['preferredGender']>(null);
-  const [maxDistanceKm, setMaxDistanceKm] = useState<number>(50);
+  const [maxDistanceKm, setMaxDistanceKm] = useState<number | null>(null);
   const [minAge, setMinAge] = useState<number>(18);
-  const [maxAge, setMaxAge] = useState<number>(35);
+  const [maxAge, setMaxAge] = useState<number>(99);
+  const [minHeight, setMinHeight] = useState<number | null>(null);
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
   const [showDistance, setShowDistance] = useState(false);
 
   useEffect(() => {
@@ -167,12 +184,19 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
         ]);
         if (preferences) {
           setPreferredGender(preferences.preferredGender);
-          setMaxDistanceKm(preferences.maxDistanceKm ?? 50);
+          setMaxDistanceKm(preferences.maxDistanceKm);
           setMinAge(preferences.minAge ?? 18);
           setMaxAge(preferences.maxAge ?? 99);
+          setMinHeight(preferences.minHeight);
+          setMaxHeight(preferences.maxHeight);
         }
         setShowDistance(privacy.showDistance);
-      } catch (_) {}
+      } catch (_) {
+        // We genuinely don't know the real saved filters now — leave Apply
+        // disabled (see loadError below) rather than risk writing these
+        // blank/default values over whatever's actually stored.
+        setLoadError(true);
+      }
       setLoading(false);
     }
     load();
@@ -201,27 +225,44 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         await Promise.all([
-          updateMyPreferences(session.access_token, { preferredGender, minAge, maxAge: maxAge === 99 ? null : maxAge, maxDistanceKm }),
+          updateMyPreferences(session.access_token, {
+            preferredGender,
+            minAge,
+            maxAge: maxAge === 99 ? null : maxAge,
+            maxDistanceKm,
+            minHeight,
+            maxHeight,
+          }),
           updatePrivacySettings(session.access_token, { showDistance }),
         ]);
         onApply?.();
         onClose();
       }
-    } catch (_) {}
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save filters. Please try again.');
+    }
     setSaving(false);
   };
 
-  const reset = async () => {
+  // Genuinely clears every filter back to "no restriction", not to some
+  // arbitrary default — the previous 50km/18-35 defaults weren't actually
+  // an unfiltered state and silently reintroduced a distance/age cap.
+  const reset = () => {
     setPreferredGender(null);
-    setMaxDistanceKm(50);
+    setMaxDistanceKm(null);
     setMinAge(18);
-    setMaxAge(35);
+    setMaxAge(99);
+    setMinHeight(null);
+    setMaxHeight(null);
     setShowDistance(false);
   };
+
+  const applyDisabled = saving || loading || loadError;
 
   return (
     <View style={styles.overlay}>
@@ -230,26 +271,31 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
         <View style={styles.sheetHandle} />
         <View style={styles.sheetTop}>
           <Text style={styles.filterTitle}>Filters</Text>
-          <Pressable onPress={reset}>
+          <Pressable onPress={reset} disabled={loading}>
             <Text style={styles.clear}>Reset</Text>
           </Pressable>
         </View>
 
         {loading ? (
           <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
+        ) : loadError ? (
+          <Text style={styles.filterError}>
+            Couldn't load your current filters. Close this and try again — applying now could
+            overwrite your saved settings.
+          </Text>
         ) : (
-          <>
+          <ScrollView style={styles.filterScroll} showsVerticalScrollIndicator={false}>
             <Text style={styles.filterLabel}>Interested in</Text>
-            <View style={styles.segment}>
+            <View style={[styles.pillRow, { marginTop: 12 }]}>
               {GENDER_OPTIONS.map((opt) => {
                 const active = preferredGender === opt.value;
                 return (
                   <Pressable
                     key={opt.label}
-                    style={[styles.segmentItem, active && styles.segmentActive]}
+                    style={[styles.pill, active && styles.pillActive]}
                     onPress={() => setPreferredGender(opt.value)}
                   >
-                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                    <Text style={[styles.pillText, active && styles.pillTextActive]}>
                       {opt.label}
                     </Text>
                   </Pressable>
@@ -267,16 +313,16 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
               <Ionicons name="location-outline" size={20} color={colors.primary} />
             </Pressable>
 
-            <RangeRow label="Max distance" value={`${maxDistanceKm} km`} />
+            <RangeRow label="Max distance" value={rangeValueLabel(maxDistanceKm, ' km')} />
             <View style={styles.pillRow}>
               {DISTANCE_OPTIONS.map((d) => (
                 <Pressable
-                  key={d}
+                  key={d ?? 'any'}
                   style={[styles.pill, maxDistanceKm === d && styles.pillActive]}
                   onPress={() => setMaxDistanceKm(d)}
                 >
                   <Text style={[styles.pillText, maxDistanceKm === d && styles.pillTextActive]}>
-                    {d} km
+                    {d === null ? 'Any' : `${d} km`}
                   </Text>
                 </Pressable>
               ))}
@@ -310,6 +356,40 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
               ))}
             </View>
 
+            <RangeRow label="Min height" value={rangeValueLabel(minHeight, 'cm')} />
+            <View style={styles.pillRow}>
+              {MIN_HEIGHT_OPTIONS.map((h) => (
+                <Pressable
+                  key={h ?? 'any'}
+                  style={[styles.pill, minHeight === h && styles.pillActive]}
+                  onPress={() =>
+                    setMinHeight(h !== null && maxHeight !== null ? Math.min(h, maxHeight) : h)
+                  }
+                >
+                  <Text style={[styles.pillText, minHeight === h && styles.pillTextActive]}>
+                    {rangeValueLabel(h, 'cm')}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <RangeRow label="Max height" value={rangeValueLabel(maxHeight, 'cm')} />
+            <View style={styles.pillRow}>
+              {MAX_HEIGHT_OPTIONS.map((h) => (
+                <Pressable
+                  key={h ?? 'any'}
+                  style={[styles.pill, maxHeight === h && styles.pillActive]}
+                  onPress={() =>
+                    setMaxHeight(h !== null && minHeight !== null ? Math.max(h, minHeight) : h)
+                  }
+                >
+                  <Text style={[styles.pillText, maxHeight === h && styles.pillTextActive]}>
+                    {rangeValueLabel(h, 'cm')}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
             <View style={styles.toggleRow}>
               <Text style={styles.filterLabel}>Show my distance</Text>
               <Switch
@@ -318,10 +398,12 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
                 trackColor={{ true: colors.primary }}
               />
             </View>
-          </>
+          </ScrollView>
         )}
 
-        <PrimaryButton onPress={saving ? undefined : save} style={styles.filterButton}>
+        {saveError ? <Text style={styles.filterError}>{saveError}</Text> : null}
+
+        <PrimaryButton onPress={applyDisabled ? undefined : save} style={styles.filterButton}>
           {saving ? 'Saving...' : 'Apply'}
         </PrimaryButton>
       </View>
@@ -539,11 +621,13 @@ const styles = StyleSheet.create({
   dim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
   filterSheet: {
     minHeight: 620,
+    maxHeight: '88%',
     borderTopLeftRadius: 36,
     borderTopRightRadius: 36,
     backgroundColor: colors.bg,
     paddingHorizontal: 40,
     paddingTop: 34,
+    paddingBottom: 24,
   },
   sheetHandle: {
     position: 'absolute',
@@ -563,20 +647,15 @@ const styles = StyleSheet.create({
   filterTitle: { color: colors.text, fontSize: 28, fontWeight: '900' },
   clear: { color: colors.primary, fontSize: 16, fontWeight: '800' },
   filterLabel: { color: colors.text, fontSize: 16, fontWeight: '900' },
-  segment: {
-    height: 58,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.line,
-    flexDirection: 'row',
-    marginTop: 20,
-    marginBottom: 38,
-    overflow: 'hidden',
+  filterScroll: { flex: 1 },
+  filterError: {
+    color: colors.primary,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+    marginTop: 12,
+    marginBottom: 12,
   },
-  segmentItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  segmentActive: { backgroundColor: colors.primary },
-  segmentText: { color: colors.text, fontWeight: '700' },
-  segmentTextActive: { color: '#FFFFFF' },
   locationBox: {
     height: 60,
     borderRadius: 14,

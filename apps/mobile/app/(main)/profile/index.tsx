@@ -9,7 +9,7 @@ import { type AppUser, type Gender, type Photo, type RelationshipGoal } from '@/
 import { getDetailedProfileCompletion } from '@/lib/profileCompleteness';
 import { getDisplayPhotoUrl } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
-import { useCurrentUser } from '@/queries/user.queries';
+import { useCurrentUser, useDeleteAccount, usePrivacySettings, useUpdatePrivacySettings } from '@/queries/user.queries';
 import { useMyPhotos, useUpdateMyProfile } from '@/queries/profile.queries';
 import { ProfileDraft, emptyDraft, draftFromUser } from '@/components/profile/types';
 import { ProfileSettingsSheet } from '@/components/profile/ProfileSettingsSheet';
@@ -117,6 +117,9 @@ export default function MyProfileScreen() {
   const currentUserQuery = useCurrentUser();
   const photosQuery = useMyPhotos();
   const updateProfileMutation = useUpdateMyProfile();
+  const privacySettingsQuery = usePrivacySettings();
+  const updatePrivacyMutation = useUpdatePrivacySettings();
+  const deleteAccountMutation = useDeleteAccount();
   const loading = currentUserQuery.isLoading || photosQuery.isLoading;
 
   useEffect(() => {
@@ -292,6 +295,40 @@ export default function MyProfileScreen() {
   const logout = async () => {
     await supabase.auth.signOut();
     router.replace('/(auth)/login');
+  };
+
+  const deleteAccount = () => {
+    Alert.alert(
+      'Delete account',
+      'This permanently deletes your account, matches, messages, and photos. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete account',
+          style: 'destructive',
+          onPress: () => {
+            deleteAccountMutation.mutate(undefined, {
+              onSuccess: async () => {
+                await supabase.auth.signOut();
+                router.replace('/(auth)/login');
+              },
+              onError: (error) => {
+                showToast(error instanceof Error ? error.message : 'Failed to delete account.', 'error');
+              },
+            });
+          },
+        },
+      ]
+    );
+  };
+
+  const toggleShowOnlineStatus = (value: boolean) => {
+    updatePrivacyMutation.mutate(
+      { showOnlineStatus: value },
+      {
+        onError: () => showToast('Could not update online status setting.', 'error'),
+      }
+    );
   };
 
   const completedPrompts = [
@@ -580,6 +617,9 @@ export default function MyProfileScreen() {
         onManagePhotos={() => router.push('/(main)/profile/photos')}
         onBlockedUsers={() => router.push('/(main)/profile/blocked')}
         onLogout={logout}
+        onDeleteAccount={deleteAccount}
+        showOnlineStatus={privacySettingsQuery.data?.showOnlineStatus ?? true}
+        onToggleShowOnlineStatus={toggleShowOnlineStatus}
       />
     </SafeAreaView>
   );

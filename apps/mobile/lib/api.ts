@@ -189,12 +189,21 @@ export type ReportInput = {
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+export function isMatchLimitError(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    (error.code === 'MATCH_LIMIT_REACHED' || error.code === 'TARGET_MATCH_LIMIT_REACHED')
+  );
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -207,7 +216,13 @@ async function parseResponse<T>(response: Response): Promise<T> {
         : data && typeof data === 'object' && 'error' in data
           ? String(data.error)
         : 'Request failed';
-    throw new ApiError(message, response.status);
+    const code =
+      data && typeof data === 'object' && 'code' in data
+        ? String(data.code)
+        : data && typeof data === 'object' && 'errorCode' in data
+          ? String(data.errorCode)
+          : undefined;
+    throw new ApiError(message, response.status, code);
   }
 
   return data as T;
@@ -607,12 +622,15 @@ export type DiscoveryUser = {
   id: string;
   name: string;
   age: number;
-  bio: string | null;
   city: string | null;
   distanceKm: string | null;
   gender: string;
-  profile: AppProfile | null;
+  jobTitle: string | null;
+  relationshipGoal: RelationshipGoal | null;
+  height: number | null;
+  primaryPhoto: Photo | null;
   photos: Photo[];
+  photoCount: number;
 };
 
 export type DiscoveryFeedResponse = {
@@ -645,6 +663,35 @@ export type PublicUser = {
 
 export async function getUserById(accessToken: string, userId: string) {
   const response = await fetch(`${API_BASE_URL}/api/v1/users/${userId}`, {
+    headers: authHeaders(accessToken),
+  });
+  return parseResponse<{ user: PublicUser }>(response);
+}
+
+// Bumps the caller's lastActiveAt so matches see them as online (see
+// ChatMatch['user'].isOnline in getChatMatches) — fire-and-forget from the
+// mobile side, see the root-layout heartbeat hook.
+export async function sendHeartbeat(accessToken: string) {
+  await fetch(`${API_BASE_URL}/api/v1/users/heartbeat`, {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+  });
+}
+
+// Permanently deletes the caller's account and all of its data (see
+// deleteAccount in apps/backend/src/controllers/users.ts) and the underlying
+// Supabase Auth identity — irreversible, never call without an explicit
+// confirmation from the user.
+export async function deleteMyAccount(accessToken: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/users/me`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  await parseResponse<void>(response);
+}
+
+export async function getMatchProfile(accessToken: string, matchId: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}/profile`, {
     headers: authHeaders(accessToken),
   });
   return parseResponse<{ user: PublicUser }>(response);
@@ -727,6 +774,7 @@ export type ChatMatch = {
     gender: string;
     bio: string | null;
     city: string | null;
+    isOnline: boolean;
     photos: Photo[];
   };
 };
@@ -798,6 +846,40 @@ export async function redeemPromoCode(accessToken: string, code: string) {
 }
 
 // --- Private 1:1 voice calling (docs/private-voice-calling-spec.md) ---------
+
+// VoIP device token registration — matches
+// apps/backend/src/controllers/callSessions.ts's registerDeviceSchema
+// (`token`/`platform`/`environment`, all required, `.strict()`) and its
+// DELETE /:token route.
+export type VoipDevicePlatform = 'IOS' | 'ANDROID';
+export type VoipDeviceEnvironment = 'SANDBOX' | 'PRODUCTION';
+
+export async function registerVoipDevice(
+  accessToken: string,
+  body: { token: string; platform: VoipDevicePlatform; environment: VoipDeviceEnvironment }
+) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/devices`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(accessToken),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  return parseResponse<{ id: string; platform: VoipDevicePlatform; environment: VoipDeviceEnvironment }>(response);
+}
+
+// The path segment is a raw device token (hex string) — encodeURIComponent
+// is required even though the current hex-only format wouldn't itself need
+// escaping, since this must stay correct if the token format ever changes.
+export async function unregisterVoipDevice(accessToken: string, token: string) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/calls/devices/${encodeURIComponent(token)}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  });
+  if (response.status === 204) return;
+  return parseResponse<void>(response);
+}
 
 export type CallPreferenceState = {
   mineEnabled: boolean;
@@ -956,8 +1038,8 @@ export async function failCall(accessToken: string, callId: string, failureReaso
   return parseResponse<CallSummary>(response);
 }
 
-export async function getMatches(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/matches`, {
+export async function getMatches(accessToken: string, limit = 20) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/matches?limit=${limit}`, {
     headers: authHeaders(accessToken),
   });
   const data = await parseResponse<MatchSummary[] | { matches?: MatchSummary[] }>(response);
@@ -966,8 +1048,8 @@ export async function getMatches(accessToken: string) {
   return [];
 }
 
-export async function getChatMatches(accessToken: string) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/chats`, {
+export async function getChatMatches(accessToken: string, limit = 20) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/chats?limit=${limit}`, {
     headers: authHeaders(accessToken),
   });
   const data = await parseResponse<ChatMatch[] | { chats?: ChatMatch[]; matches?: ChatMatch[] }>(response);

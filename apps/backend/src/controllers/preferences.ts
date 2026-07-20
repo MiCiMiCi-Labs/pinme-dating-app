@@ -3,34 +3,14 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 
-const preferencesSchema = z
-  .object({
-    preferredGender: z.nativeEnum(Gender).nullable().optional(),
-    minAge: z.number().int().min(18).max(120).nullable().optional(),
-    maxAge: z.number().int().min(18).max(120).nullable().optional(),
-    maxDistanceKm: z.number().int().min(1).max(500).nullable().optional(),
-    minHeight: z.number().int().min(90).max(250).nullable().optional(),
-    maxHeight: z.number().int().min(90).max(250).nullable().optional(),
-  })
-  .strict()
-  .refine(
-    (data) =>
-      data.minAge == null || data.maxAge == null || data.minAge <= data.maxAge,
-    {
-      message: 'minAge must be less than or equal to maxAge',
-      path: ['minAge'],
-    }
-  )
-  .refine(
-    (data) =>
-      data.minHeight == null ||
-      data.maxHeight == null ||
-      data.minHeight <= data.maxHeight,
-    {
-      message: 'minHeight must be less than or equal to maxHeight',
-      path: ['minHeight'],
-    }
-  );
+const preferencesSchema = z.object({
+  preferredGender: z.nativeEnum(Gender).nullable().optional(),
+  minAge: z.number().int().min(18).max(120).nullable().optional(),
+  maxAge: z.number().int().min(18).max(120).nullable().optional(),
+  maxDistanceKm: z.number().int().min(1).max(500).nullable().optional(),
+  minHeight: z.number().int().min(90).max(250).nullable().optional(),
+  maxHeight: z.number().int().min(90).max(250).nullable().optional(),
+}).strict();
 
 async function getCurrentAppUser(authUserId: string) {
   return prisma.user.findUnique({
@@ -93,6 +73,40 @@ export async function updateMyPreferences(req: Request, res: Response) {
       res
         .status(404)
         .json({ message: 'App user not found. Please sync user first.' });
+      return;
+    }
+
+    // A partial update (e.g. just { minAge: 50 }) only carries the fields
+    // the client actually changed. Validating cross-field constraints
+    // (min <= max) against that partial payload alone can't see a
+    // pre-existing max from a previous save, so an update that's fine on
+    // its own could still leave the row in an impossible state (e.g.
+    // minAge=50 on top of an existing maxAge=35). Merge onto the current
+    // row first, then validate the result that will actually be stored.
+    const existing = await prisma.preference.findUnique({ where: { userId: user.id } });
+    const merged = { ...existing, ...parsedBody.data };
+
+    if (
+      merged.minAge != null &&
+      merged.maxAge != null &&
+      merged.minAge > merged.maxAge
+    ) {
+      res.status(400).json({
+        message: 'Invalid preferences payload',
+        errors: { minAge: ['minAge must be less than or equal to maxAge'] },
+      });
+      return;
+    }
+
+    if (
+      merged.minHeight != null &&
+      merged.maxHeight != null &&
+      merged.minHeight > merged.maxHeight
+    ) {
+      res.status(400).json({
+        message: 'Invalid preferences payload',
+        errors: { minHeight: ['minHeight must be less than or equal to maxHeight'] },
+      });
       return;
     }
 

@@ -26,7 +26,7 @@ export async function getPrivacy(req: Request, res: Response) {
       settings ?? {
         discoverable: true,
         showDistance: false,
-        showOnlineStatus: false,
+        showOnlineStatus: true,
       }
     );
   } catch {
@@ -61,7 +61,7 @@ export async function updatePrivacy(req: Request, res: Response) {
         userId: dbUserId,
         discoverable: data.discoverable ?? true,
         showDistance: data.showDistance ?? false,
-        showOnlineStatus: data.showOnlineStatus ?? false,
+        showOnlineStatus: data.showOnlineStatus ?? true,
       },
     });
 
