@@ -14,6 +14,7 @@ import { useMyPhotos, useUpdateMyProfile } from '@/queries/profile.queries';
 import { ProfileDraft, emptyDraft, draftFromUser } from '@/components/profile/types';
 import { ProfileSettingsSheet } from '@/components/profile/ProfileSettingsSheet';
 import {
+  CityField,
   MultiSelectField,
   ProfileCompletionBar,
   ProfileEditSectionModal,
@@ -24,6 +25,7 @@ import {
   VisibilityControl,
   type ProfileSectionKey,
 } from '@/components/profile/ProfileEditComponents';
+import type { CitySuggestion } from '@/lib/places';
 import { setProfileCompletion } from '@/stores/profileCompletion.store';
 import { showToast } from '@/stores/toast.store';
 
@@ -114,6 +116,7 @@ export default function MyProfileScreen() {
   const [activeSection, setActiveSection] = useState<ProfileSectionKey | null>(null);
   const [activePrompt, setActivePrompt] = useState<1 | 2 | 3 | null>(null);
   const [customInterest, setCustomInterest] = useState('');
+  const [selectedCityPlaceId, setSelectedCityPlaceId] = useState<string | null>(null);
   const currentUserQuery = useCurrentUser();
   const photosQuery = useMyPhotos();
   const updateProfileMutation = useUpdateMyProfile();
@@ -126,6 +129,10 @@ export default function MyProfileScreen() {
     if (!currentUserQuery.data?.user) return;
     setUser(currentUserQuery.data.user);
     setDraft(draftFromUser(currentUserQuery.data.user));
+    // Whatever's already saved is trusted as valid until the user edits it —
+    // 'saved-city' is just a sentinel, not a real place id (mirrors the same
+    // pattern in (auth)/complete-profile.tsx's onboarding city step).
+    setSelectedCityPlaceId(currentUserQuery.data.user.city ? 'saved-city' : null);
   }, [currentUserQuery.data?.user]);
 
   useEffect(() => {
@@ -208,8 +215,21 @@ export default function MyProfileScreen() {
     setCustomInterest('');
   };
 
+  const updateCity = (value: string) => {
+    setDraft(current => ({ ...current, city: value }));
+    setSelectedCityPlaceId(null);
+  };
+
+  const selectCitySuggestion = (suggestion: CitySuggestion) => {
+    setDraft(current => ({ ...current, city: suggestion.label }));
+    setSelectedCityPlaceId(suggestion.placeId);
+  };
+
   const validate = () => {
     if (!draft.name.trim()) return 'Name is required.';
+    if (draft.city.trim() && !selectedCityPlaceId) {
+      return 'Please choose your city from the suggestions.';
+    }
     if (draft.birthday) {
       const birthday = new Date(draft.birthday);
       if (Number.isNaN(birthday.getTime())) return 'Birthday must be a valid date, e.g. 2000-01-01.';
@@ -283,6 +303,7 @@ export default function MyProfileScreen() {
       const nextUser: AppUser = { ...result.user, profile: result.profile };
       setUser(nextUser);
       setDraft(draftFromUser(nextUser));
+      setSelectedCityPlaceId(nextUser.city ? 'saved-city' : null);
       setActiveSection(null);
       showToast('Profile saved', 'success');
     } catch (error) {
@@ -397,7 +418,13 @@ export default function MyProfileScreen() {
               options={genderOptions.map(option => option.label)}
               onSelect={label => setSingleOption('gender', genderOptions.find(option => option.label === label)?.value ?? '')}
             />
-            <ProfileField label="City" value={draft.city} onChangeText={set('city')} placeholder="Auckland" />
+            <CityField
+              label="City"
+              value={draft.city}
+              onChangeText={updateCity}
+              onSelectSuggestion={selectCitySuggestion}
+              isValidSelection={Boolean(selectedCityPlaceId)}
+            />
             <ProfileField label="Height" value={draft.height} onChangeText={set('height')} placeholder="170" keyboardType="number-pad" helper="Use centimeters. 120–230 cm." />
             <ProfileField label="Bio" value={draft.bio} onChangeText={set('bio')} multiline placeholder="Tell people a little about yourself..." helper={`${draft.bio.length}/500 recommended`} />
           </>

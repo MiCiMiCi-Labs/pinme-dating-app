@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -38,8 +39,18 @@ import {
   setMicEnabled,
   setVoiceRoomMutedUsers,
 } from '@/stores/voiceRoom.store';
+import { showToast } from '@/stores/toast.store';
 
 registerGlobals();
+
+// AudioSession.selectAudioOutput's accepted deviceIds differ by platform
+// (see @livekit/react-native's AudioSession.d.ts, and the same constants in
+// components/voice-call-modal.tsx for the 1:1 calling feature): Android
+// exposes real "speaker"/"earpiece" device ids, but iOS only ever exposes
+// "default" and "force_speaker" — there is no true iOS earpiece selector in
+// this API; "default" just lets iOS's own AVAudioSession routing decide.
+const SPEAKER_OUTPUT_ID = Platform.OS === 'ios' ? 'force_speaker' : 'speaker';
+const EARPIECE_OUTPUT_ID = Platform.OS === 'ios' ? 'default' : 'earpiece';
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -122,10 +133,20 @@ export default function VoiceRoomScreen() {
   }, [room]);
 
   useEffect(() => {
-    if (!roomId || !accessTokenRef.current) return;
+    // Gated on `token` (state), not accessTokenRef.current directly: this
+    // effect and the join() effect above both fire on the same initial
+    // mount, but join() is async — accessTokenRef.current is still null at
+    // the moment this one's body runs, so it used to bail out immediately
+    // and, since roomId/refreshRoom never change afterward, never got a
+    // second chance to register the interval. The room's participant list
+    // was then only ever whatever it was at the initial join — for the
+    // room's creator specifically, that's just themselves, since anyone
+    // who joins later is never picked up. token only becomes non-null once
+    // join() actually succeeds, so this now correctly re-fires right after.
+    if (!roomId || !token) return;
     const timer = setInterval(refreshRoom, 4000);
     return () => clearInterval(timer);
-  }, [refreshRoom, roomId]);
+  }, [refreshRoom, roomId, token]);
 
   const isOwner = Boolean(room && currentUserId && room.ownerId === currentUserId);
   const myParticipant = useMemo(
@@ -259,6 +280,8 @@ function VoiceRoomStage({
   const connectionState = useConnectionState();
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
   const mutedByHost = Boolean(myParticipant?.isMutedByHost);
+  const [speakerOn, setSpeakerOn] = useState(true);
+  const [speakerToggling, setSpeakerToggling] = useState(false);
 
   useEffect(() => {
     AudioSession.startAudioSession();
@@ -279,9 +302,56 @@ function VoiceRoomStage({
 
   const toggleMic = async () => {
     if (mutedByHost) return;
+
+    // The WebRTC engine can silently drop its connection (network blip,
+    // app backgrounding) while the room still looks "joined" here. Trying
+    // to publish a track while it's down always fails with
+    // PublishTrackError ("engine not connected within timeout") — attempt
+    // it anyway and it just repeats that failure every time the user
+    // retries, so check first and give a clear reason instead.
+    if (connectionState !== 'connected') {
+      showToast('Reconnecting to the room — try again in a moment.', 'error');
+      return;
+    }
+
     const nextEnabled = !isMicrophoneEnabled;
     setMicEnabled(nextEnabled);
-    await localParticipant.setMicrophoneEnabled(nextEnabled);
+
+    try {
+      await localParticipant.setMicrophoneEnabled(nextEnabled);
+    } catch {
+      // Previously uncaught: the promise rejected, the optimistic store
+      // update above was never rolled back, and the mic stayed stuck
+      // showing "on" with no track actually published.
+      setMicEnabled(!nextEnabled);
+      showToast('Could not update your mic. Check your connection and try again.', 'error');
+    }
+  };
+
+  // Same pattern as components/voice-call-modal.tsx's 1:1 call toggle — see
+  // SPEAKER_OUTPUT_ID/EARPIECE_OUTPUT_ID above for the iOS "no true
+  // earpiece" limitation. Keeps its prior state and shows a toast on any
+  // failure (including the target output not being available on this
+  // device) rather than silently no-op'ing.
+  const toggleSpeaker = async () => {
+    if (speakerToggling) return;
+    const nextOn = !speakerOn;
+    const targetOutput = nextOn ? SPEAKER_OUTPUT_ID : EARPIECE_OUTPUT_ID;
+
+    setSpeakerToggling(true);
+    try {
+      const outputs = await AudioSession.getAudioOutputs();
+      if (!outputs.includes(targetOutput)) {
+        showToast('That audio output is not available on this device', 'error');
+        return;
+      }
+      await AudioSession.selectAudioOutput(targetOutput);
+      setSpeakerOn(nextOn);
+    } catch {
+      showToast('Could not switch audio output', 'error');
+    } finally {
+      setSpeakerToggling(false);
+    }
   };
 
   const leave = async () => {
@@ -359,16 +429,31 @@ function VoiceRoomStage({
       </ScrollView>
 
       <View style={styles.controls}>
-        <Pressable
-          style={[styles.micControl, (!isMicrophoneEnabled || mutedByHost) && styles.micControlMuted]}
-          onPress={toggleMic}
-          disabled={mutedByHost}
-        >
-          <Ionicons name={isMicrophoneEnabled && !mutedByHost ? 'mic' : 'mic-off'} size={28} color="#FFFFFF" />
-        </Pressable>
-        <Text style={styles.controlHint}>
-          {mutedByHost ? 'Host muted your mic' : isMicrophoneEnabled ? 'Mic on' : 'Mic off'}
-        </Text>
+        <View style={styles.controlsRow}>
+          <View style={styles.controlItem}>
+            <Pressable
+              style={[styles.micControl, (!isMicrophoneEnabled || mutedByHost) && styles.micControlMuted]}
+              onPress={toggleMic}
+              disabled={mutedByHost}
+            >
+              <Ionicons name={isMicrophoneEnabled && !mutedByHost ? 'mic' : 'mic-off'} size={28} color="#FFFFFF" />
+            </Pressable>
+            <Text style={styles.controlHint}>
+              {mutedByHost ? 'Host muted' : isMicrophoneEnabled ? 'Mic on' : 'Mic off'}
+            </Text>
+          </View>
+
+          <View style={styles.controlItem}>
+            <Pressable
+              style={[styles.micControl, !speakerOn && styles.micControlMuted]}
+              onPress={toggleSpeaker}
+              disabled={speakerToggling}
+            >
+              <Ionicons name={speakerOn ? 'volume-high' : 'volume-low'} size={28} color="#FFFFFF" />
+            </Pressable>
+            <Text style={styles.controlHint}>{speakerOn ? 'Speaker' : 'Earpiece'}</Text>
+          </View>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -528,6 +613,14 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 34,
+    alignItems: 'center',
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 32,
+  },
+  controlItem: {
     alignItems: 'center',
     gap: 10,
   },
