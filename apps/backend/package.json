@@ -11,6 +11,7 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:seed": "ts-node prisma/seed.ts",
+    "db:seed:clean": "ts-node prisma/seed.ts --clean-only",
     "shadow-db:bootstrap": "node shadow-db/manage.mjs bootstrap",
     "shadow-db:start": "node shadow-db/manage.mjs start",
     "shadow-db:stop": "node shadow-db/manage.mjs stop",

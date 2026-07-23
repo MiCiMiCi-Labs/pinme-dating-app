@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -17,6 +17,7 @@ import {
   type KeyboardTypeOptions,
 } from 'react-native';
 import { colors, PrimaryButton } from '@/design/system';
+import { searchCities, type CitySuggestion } from '@/lib/places';
 
 export type ProfileSectionKey =
   | 'photos'
@@ -172,6 +173,102 @@ export function SelectField({
       ) : null}
     </View>
   );
+}
+
+// Requires picking a suggestion rather than accepting free text — matches
+// the onboarding city step (app/(auth)/complete-profile.tsx), whose picker
+// this reuses. This field only stores the display label, never a
+// coordinate: it's cosmetic, unrelated to the precise lat/lng distance
+// matching actually uses (that only ever comes from device GPS permission).
+export function CityField({
+  label,
+  value,
+  onChangeText,
+  onSelectSuggestion,
+  isValidSelection,
+  placeholder = 'Start typing your city',
+  helper,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  onSelectSuggestion: (suggestion: CitySuggestion) => void;
+  isValidSelection: boolean;
+  placeholder?: string;
+  helper?: string;
+}) {
+  const [suggestions, setSuggestions] = useState<CitySuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const query = value.trim();
+
+    if (isValidSelection || query.length < 2) {
+      setSuggestions([]);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    const timeout = setTimeout(async () => {
+      try {
+        const results = await searchCities(query);
+        if (!cancelled) setSuggestions(results);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [value, isValidSelection]);
+
+  return (
+    <View style={styles.fieldBlock}>
+      <View style={styles.fieldHeader}>
+        <Text style={styles.fieldLabel}>{label}</Text>
+      </View>
+      <View style={styles.cityInputRow}>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={colors.grayIcon}
+          style={[styles.input, styles.cityInput]}
+        />
+        {isValidSelection ? (
+          <Ionicons name="checkmark-circle" size={20} color={colors.primary} style={styles.cityCheck} />
+        ) : null}
+      </View>
+      {!isValidSelection && isQueryLongEnough(value) ? (
+        <Text style={styles.helperText}>Choose your city from the suggestions below.</Text>
+      ) : helper ? (
+        <Text style={styles.helperText}>{helper}</Text>
+      ) : null}
+      {loading ? <ActivityIndicator size="small" color={colors.primary} style={styles.cityLoading} /> : null}
+      {suggestions.length > 0 ? (
+        <View style={styles.optionPanel}>
+          {suggestions.map((suggestion) => (
+            <Pressable
+              key={suggestion.placeId}
+              style={styles.optionRow}
+              onPress={() => onSelectSuggestion(suggestion)}
+            >
+              <Text style={styles.optionText}>{suggestion.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function isQueryLongEnough(value: string) {
+  return value.trim().length >= 2;
 }
 
 export function MultiSelectField({
@@ -466,6 +563,18 @@ const styles = StyleSheet.create({
   helperBefore: {
     marginTop: -2,
     marginBottom: 10,
+  },
+  cityInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  cityInput: {
+    flex: 1,
+  },
+  cityCheck: {},
+  cityLoading: {
+    marginTop: 8,
   },
   selectInput: {
     minHeight: 54,

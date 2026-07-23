@@ -13,6 +13,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,6 +26,7 @@ import {
   isoToBirthdayInput,
 } from '@/lib/birthday';
 import {
+  deletePhoto,
   getMyPhotos,
   getMyProfile,
   syncAuthUser,
@@ -51,6 +53,7 @@ type PhotoSlot = {
   uri: string;
   mimeType: string;
   remote?: boolean;
+  id?: string;
 } | null;
 
 type ProfileForm = {
@@ -135,6 +138,7 @@ export default function CompleteProfileScreen() {
   const [locationConsent, setLocationConsent] = useState<LocationConsent>(null);
   const [preciseLocation, setPreciseLocation] = useState<PreciseLocation>(null);
   const [photos, setPhotos] = useState<PhotoSlot[]>(emptyPhotos);
+  const [uploadingIndex, setUploadingIndex] = useState<number | null>(null);
   const [loadingExistingProfile, setLoadingExistingProfile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -142,6 +146,19 @@ export default function CompleteProfileScreen() {
   const currentStepIndex = steps.findIndex((item) => item.id === step);
   const birthdayAge = useMemo(() => getAgeFromBirthdayInput(form.birthday), [form.birthday]);
   const selectedPhotoCount = photos.filter(Boolean).length;
+
+  // Computed instead of a percentage width (previously `31.3%`, with the
+  // first slot enlarged to `64.2%`): percentage widths combined with a fixed
+  // `gap` round differently depending on the exact screen width, which is
+  // what made a slot come out visibly narrower than the others on some
+  // devices, and the enlarged-first-slot layout also always left the 6th
+  // slot alone on its own row. All six are now identical, uniform, exactly
+  // 3-per-row on any screen width — the main photo is distinguished only by
+  // its "Main photo" label, not by a different box size.
+  const { width: windowWidth } = useWindowDimensions();
+  const photoGridGap = 10;
+  const photoGridWidth = windowWidth - 24 * 2;
+  const photoSlotWidth = (photoGridWidth - photoGridGap * 2) / 3;
   const bioLength = form.bio.length;
 
   const updateField = (key: keyof ProfileForm, value: string) => {
@@ -202,7 +219,7 @@ export default function CompleteProfileScreen() {
         if (existingPhotos.length > 0) {
           const nextPhotos = [...emptyPhotos];
           existingPhotos.slice(0, nextPhotos.length).forEach((photo, index) => {
-            nextPhotos[index] = { uri: photo.url, mimeType: 'image/jpeg', remote: true };
+            nextPhotos[index] = { uri: photo.url, mimeType: 'image/jpeg', remote: true, id: photo.id };
           });
           setPhotos(nextPhotos);
         }
@@ -328,11 +345,42 @@ export default function CompleteProfileScreen() {
     const asset = result.assets[0];
     if (!asset) return;
 
-    setPhotos((current) => {
-      const next = [...current];
-      next[index] = { uri: asset.uri, mimeType: asset.mimeType ?? 'image/jpeg' };
-      return next;
-    });
+    const accessToken = session?.access_token;
+    if (!accessToken) {
+      setError('Please log in again before uploading photos.');
+      return;
+    }
+
+    // Upload right away instead of waiting for "Save and start" at the end
+    // of the wizard — this is what actually runs the AWS content/face check
+    // (see uploadPhoto in controllers/photos.ts), so a rejected main photo
+    // (no face detected, too dark, etc.) surfaces immediately on this step
+    // instead of after filling out the rest of the wizard.
+    const mimeType = asset.mimeType ?? 'image/jpeg';
+    const previousPhoto = photos[index];
+    setUploadingIndex(index);
+
+    try {
+      const thumbnail = await createPhotoThumbnail(asset.uri);
+      const uploaded = await uploadPhoto(accessToken, asset.uri, mimeType, thumbnail);
+
+      // Replacing a slot that was already uploaded — remove the old photo
+      // now that the new one is confirmed, so it doesn't keep counting
+      // against the account's photo limit.
+      if (previousPhoto?.id) {
+        deletePhoto(accessToken, previousPhoto.id).catch(() => {});
+      }
+
+      setPhotos((current) => {
+        const next = [...current];
+        next[index] = { uri: asset.uri, mimeType, remote: true, id: uploaded.id };
+        return next;
+      });
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : 'Failed to upload photo.');
+    } finally {
+      setUploadingIndex(null);
+    }
   };
 
   const validateStep = (stepToValidate: StepId) => {
@@ -465,15 +513,6 @@ export default function CompleteProfileScreen() {
         });
       }
 
-      const localPhotos = photos.filter((photo): photo is Exclude<PhotoSlot, null> =>
-        Boolean(photo && !photo.remote)
-      );
-
-      for (const photo of localPhotos) {
-        const thumbnail = await createPhotoThumbnail(photo.uri);
-        await uploadPhoto(accessToken, photo.uri, photo.mimeType, thumbnail);
-      }
-
       const complete = await markProfileComplete();
 
       if (!complete) {
@@ -596,7 +635,8 @@ export default function CompleteProfileScreen() {
               <Pressable
                 key={`photo-${index}`}
                 onPress={() => pickPhoto(index)}
-                style={[styles.photoSlot, index === 0 && styles.primaryPhoto]}
+                disabled={uploadingIndex !== null}
+                style={[styles.photoSlot, { width: photoSlotWidth }]}
               >
                 {photo ? (
                   <Image source={{ uri: photo.uri }} style={styles.photo} contentFit="cover" />
@@ -608,6 +648,11 @@ export default function CompleteProfileScreen() {
                     </Text>
                   </View>
                 )}
+                {uploadingIndex === index ? (
+                  <View style={styles.photoUploadingOverlay}>
+                    <ActivityIndicator color="#FFFFFF" />
+                  </View>
+                ) : null}
               </Pressable>
             ))}
           </View>
@@ -758,7 +803,7 @@ export default function CompleteProfileScreen() {
             <View style={styles.primaryAction}>
               <PrimaryButton
                 onPress={
-                  saving
+                  saving || uploadingIndex !== null
                     ? undefined
                     : currentStepIndex === steps.length - 1
                       ? saveProfile
@@ -767,9 +812,11 @@ export default function CompleteProfileScreen() {
               >
                 {saving
                   ? 'Saving profile...'
-                  : currentStepIndex === steps.length - 1
-                    ? 'Save and start'
-                    : 'Continue'}
+                  : uploadingIndex !== null
+                    ? 'Uploading photo...'
+                    : currentStepIndex === steps.length - 1
+                      ? 'Save and start'
+                      : 'Continue'}
               </PrimaryButton>
             </View>
           </View>
@@ -965,16 +1012,12 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   photoSlot: {
-    width: '31.3%',
     aspectRatio: 0.78,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.line,
     overflow: 'hidden',
     backgroundColor: '#FAFAFB',
-  },
-  primaryPhoto: {
-    width: '64.2%',
   },
   photo: {
     width: '100%',
@@ -991,6 +1034,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     textAlign: 'center',
+  },
+  photoUploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
   },
   locationCard: {
     borderRadius: 16,

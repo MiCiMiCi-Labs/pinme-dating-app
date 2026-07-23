@@ -129,7 +129,6 @@ export function SwipeActions({ onNope, onLike }: { onNope: () => void; onLike: (
     <View style={styles.actionRow}>
       <RoundActionButton icon="close" color={colors.orange} onPress={onNope} />
       <RoundActionButton icon="heart" filled size={102} iconSize={48} onPress={onLike} />
-      <RoundActionButton icon="star" color={colors.purple} />
     </View>
   );
 }
@@ -395,7 +394,8 @@ export function FilterSheet({ onClose, onApply }: { onClose: () => void; onApply
               <Switch
                 value={showDistance}
                 onValueChange={setShowDistance}
-                trackColor={{ true: colors.primary }}
+                trackColor={{ false: '#E4E4EA', true: '#F5B8C1' }}
+                thumbColor={showDistance ? colors.primary : '#FFFFFF'}
               />
             </View>
           </ScrollView>
