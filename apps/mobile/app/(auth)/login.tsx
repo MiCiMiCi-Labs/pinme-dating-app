@@ -23,6 +23,10 @@ import { colors, LogoMark, PrimaryButton, SocialIconButton, TextButton } from '@
 
 const oauthRedirectTo = Linking.createURL('auth/callback');
 
+// Hidden for formal testing — flip back to true to bring email/password
+// login back for internal/dev use.
+const SHOW_EMAIL_LOGIN_OPTION = false;
+
 function getLoginErrorMessage(error: unknown) {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
@@ -232,7 +236,7 @@ export default function LoginScreen() {
               </>
             ) : (
               <>
-                {__DEV__ ? (
+                {SHOW_EMAIL_LOGIN_OPTION && __DEV__ ? (
                   <>
                     <Pressable style={styles.emailPrimaryButton} onPress={() => setShowEmailForm(true)}>
                       <Text style={styles.emailPrimaryText}>Continue with email</Text>
