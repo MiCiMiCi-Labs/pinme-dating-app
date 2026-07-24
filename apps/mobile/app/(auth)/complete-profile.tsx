@@ -3,7 +3,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -139,6 +139,15 @@ export default function CompleteProfileScreen() {
   const [preciseLocation, setPreciseLocation] = useState<PreciseLocation>(null);
   const [photos, setPhotos] = useState<PhotoSlot[]>(emptyPhotos);
   const [uploadingIndex, setUploadingIndex] = useState<number | null>(null);
+  // A brand-new sign-up (e.g. first-ever Apple/Google OAuth) has no backend
+  // User row yet — syncAuthUser only creates one once name/gender/birthday
+  // are known (see controllers/auth.ts's syncCurrentUser), which previously
+  // didn't happen until the final "Save profile" step. Photos now upload
+  // immediately on the photos step (see pickPhoto below), so that row must
+  // exist before then, or uploadPhoto 404s with "User not found". Tracked in
+  // a ref (not state) purely to avoid repeating this call on every photo
+  // pick once it has already succeeded once this session.
+  const userRowEnsuredRef = useRef(false);
   const [loadingExistingProfile, setLoadingExistingProfile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -361,6 +370,21 @@ export default function CompleteProfileScreen() {
     setUploadingIndex(index);
 
     try {
+      // A brand-new sign-up has no backend User row yet at this point — the
+      // "basics" step (already completed before reaching photos) collected
+      // everything syncCurrentUser needs to create it. Existing accounts
+      // just get updated, so this is safe to call unconditionally on first
+      // use here.
+      if (!userRowEnsuredRef.current) {
+        const birthdayIso = birthdayInputToIso(form.birthday);
+        await syncAuthUser(accessToken, {
+          name: form.name.trim(),
+          birthday: birthdayIso ?? undefined,
+          gender: form.gender || undefined,
+        });
+        userRowEnsuredRef.current = true;
+      }
+
       const thumbnail = await createPhotoThumbnail(asset.uri);
       const uploaded = await uploadPhoto(accessToken, asset.uri, mimeType, thumbnail);
 

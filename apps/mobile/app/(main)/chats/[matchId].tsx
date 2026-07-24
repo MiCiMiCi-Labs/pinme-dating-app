@@ -1453,7 +1453,7 @@ export default function ChatRoomScreen() {
               handleStartCall();
             }}>
               <Ionicons name="call-outline" size={22} color={colors.primary} />
-              <Text style={styles.actionLabel}>Call</Text>
+              <Text style={styles.actionLabel} numberOfLines={1}>Call</Text>
             </Pressable>
             <Pressable style={styles.actionTile} onPress={() => {
               setActionsOpen(false);
@@ -1464,8 +1464,8 @@ export default function ChatRoomScreen() {
                 size={22}
                 color={colors.primary}
               />
-              <Text style={styles.actionLabel}>
-                {callPreference?.mineEnabled ? 'Voice: On' : 'Voice: Off'}
+              <Text style={styles.actionLabel} numberOfLines={1}>
+                {callPreference?.mineEnabled ? 'Voice On' : 'Voice Off'}
               </Text>
             </Pressable>
             <Pressable style={styles.actionTile} onPress={() => {
@@ -1473,18 +1473,18 @@ export default function ChatRoomScreen() {
               handlePickMedia();
             }}>
               <Ionicons name="image-outline" size={22} color={colors.primary} />
-              <Text style={styles.actionLabel}>Photo</Text>
+              <Text style={styles.actionLabel} numberOfLines={1}>Photo</Text>
             </Pressable>
             <Pressable style={styles.actionTile} onPress={() => {
               setActionsOpen(false);
               setStickerPickerOpen(true);
             }}>
               <Ionicons name="film-outline" size={22} color={colors.primary} />
-              <Text style={styles.actionLabel}>GIF</Text>
+              <Text style={styles.actionLabel} numberOfLines={1}>GIF</Text>
             </Pressable>
             <Pressable style={styles.actionTile} onPress={() => handleGenerateReplySuggestions(replyTone)}>
               <Ionicons name="sparkles" size={22} color={colors.primary} />
-              <Text style={styles.actionLabel}>AI reply</Text>
+              <Text style={styles.actionLabel} numberOfLines={1}>AI reply</Text>
             </Pressable>
           </View>
         )}
@@ -1998,8 +1998,8 @@ const styles = StyleSheet.create({
   },
   actionLabel: {
     color: colors.text,
-    fontSize: 12,
-    fontWeight: '800',
+    fontSize: 11,
+    fontWeight: '700',
   },
   assistantPanel: {
     borderWidth: 1,

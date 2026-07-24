@@ -3,12 +3,15 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useQueryClient } from '@tanstack/react-query';
 import { deletePhoto, getMyPhotos, setPrimaryPhoto, uploadPhoto, type Photo } from '@/lib/api';
 import { createPhotoThumbnail } from '@/lib/photos';
 import { supabase } from '@/lib/supabase';
 import { colors } from '@/design/system';
 import { PhotosHeader } from '@/components/profile/PhotosHeader';
 import { PhotoManagementGrid } from '@/components/profile/PhotoManagementGrid';
+import { useAuthUserId } from '@/queries/auth';
+import { queryKeys } from '@/queries/keys';
 
 async function getToken(): Promise<string | null> {
   const { data: { session } } = await supabase.auth.getSession();
@@ -20,6 +23,13 @@ export default function PhotosScreen() {
   const [loading, setLoading] = useState(true);
   const [uploadingSlot, setUploadingSlot] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const userId = useAuthUserId();
+
+  function invalidateMyPhotos() {
+    if (!userId) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.myPhotos(userId) });
+  }
 
   useEffect(() => { load(); }, []);
 
@@ -85,6 +95,7 @@ export default function PhotosScreen() {
       const thumbnail = await createPhotoThumbnail(asset.uri);
       const photo = await uploadPhoto(token, asset.uri, mimeType, thumbnail);
       setPhotos(prev => [...prev, photo]);
+      invalidateMyPhotos();
     } catch (err) {
       Alert.alert('Upload failed', err instanceof Error ? err.message : 'Please try again.');
     } finally {
@@ -105,6 +116,7 @@ export default function PhotosScreen() {
           isVerified: p.id === photoId ? updated.isVerified : false,
         })),
       );
+      invalidateMyPhotos();
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       Alert.alert('Cannot set as primary', msg || 'Could not update primary photo.');
@@ -127,6 +139,7 @@ export default function PhotosScreen() {
         }
         return remaining;
       });
+      invalidateMyPhotos();
     } catch {
       Alert.alert('Failed', 'Could not delete photo.');
     } finally {
