@@ -23,9 +23,9 @@ import { colors, LogoMark, PrimaryButton, SocialIconButton, TextButton } from '@
 
 const oauthRedirectTo = Linking.createURL('auth/callback');
 
-// Hidden for formal testing — flip back to true to bring email/password
-// login back for internal/dev use.
-const SHOW_EMAIL_LOGIN_OPTION = false;
+// Needed so Apple's TestFlight/App Review reviewer has a way to log in —
+// they can't complete Apple/Google/Facebook OAuth or receive a real SMS code.
+const SHOW_EMAIL_LOGIN_OPTION = true;
 
 function getLoginErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -236,7 +236,7 @@ export default function LoginScreen() {
               </>
             ) : (
               <>
-                {SHOW_EMAIL_LOGIN_OPTION && __DEV__ ? (
+                {SHOW_EMAIL_LOGIN_OPTION ? (
                   <>
                     <Pressable style={styles.emailPrimaryButton} onPress={() => setShowEmailForm(true)}>
                       <Text style={styles.emailPrimaryText}>Continue with email</Text>
